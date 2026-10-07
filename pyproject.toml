@@ -8,7 +8,7 @@ dependencies = [
     "uvicorn[standard]",
     "langgraph",
     "langchain-core",
-    "google-generativeai",
+    "google-genai",
     "psycopg[binary]",
     "sqlalchemy",
     "pydantic",
