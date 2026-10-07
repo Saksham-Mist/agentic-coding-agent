@@ -1,0 +1,14 @@
+# reference/ holds answer-key solutions the agent must never see
+# inside the sandbox image.
+reference/
+.env
+.git/
+.gitignore
+tests/
+logs/
+*.log
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+README.md
