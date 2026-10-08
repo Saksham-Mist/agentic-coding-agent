@@ -15,8 +15,8 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 logger = logging.getLogger("agentic_coding_agent.llm")
 
 # Configurable because free-tier quota is per model (20 requests/day
-# on gemini-3.8-flash); pick the model via GEMINI_MODEL in .env.
-DEFAULT_MODEL = "gemini-3.8-flash"
+# on gemini-3.8-flash vs 500 on 3.5-flash-lite); override via GEMINI_MODEL.
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 MODEL = os.environ.get("GEMINI_MODEL", DEFAULT_MODEL)
 
 # The free tier returns 503 "high demand" often enough in practice
