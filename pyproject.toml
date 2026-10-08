@@ -9,6 +9,7 @@ dependencies = [
     "langgraph",
     "langchain-core",
     "google-genai",
+    "tenacity",
     "psycopg[binary]",
     "sqlalchemy",
     "pydantic",
