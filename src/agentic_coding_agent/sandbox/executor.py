@@ -36,9 +36,15 @@ def execute_code(
     language: str,
     test_cases: list[dict],
     entry_point: str = "solution",
+    comparator: str = "exact",
+    arg_types: dict | None = None,
+    return_type: str | None = None,
 ) -> dict:
     """Run `code` inside a fresh, resource-limited container and
-    return the the design notes output shape."""
+    return the the design notes output shape.
+
+    comparator/arg_types/return_type come straight from the matching
+    task_catalog.json entry — see the design notes "Harness modes"."""
     if language != "python":
         return _empty_result("error", f"unsupported language: {language!r}")
 
@@ -47,6 +53,9 @@ def execute_code(
         "code": code,
         "entry_point": entry_point,
         "test_cases": test_cases,
+        "comparator": comparator,
+        "arg_types": arg_types,
+        "return_type": return_type,
     })
 
     cmd = [
