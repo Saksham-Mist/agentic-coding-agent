@@ -14,7 +14,10 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 logger = logging.getLogger("agentic_coding_agent.llm")
 
-MODEL = "gemini-3.8-flash"
+# Configurable because free-tier quota is per model (20 requests/day
+# on gemini-3.8-flash); pick the model via GEMINI_MODEL in .env.
+DEFAULT_MODEL = "gemini-3.8-flash"
+MODEL = os.environ.get("GEMINI_MODEL", DEFAULT_MODEL)
 
 # The free tier returns 503 "high demand" often enough in practice
 # (hit twice in three calls while building this) that retrying is
@@ -32,12 +35,12 @@ class GeminiClient:
     """Thin wrapper around google-genai. One `generate` call = one
     logged call, with prompt/response/thoughts/total token counts."""
 
-    def __init__(self, api_key: str | None = None, model: str = MODEL):
+    def __init__(self, api_key: str | None = None, model: str | None = None):
         key = api_key or os.environ.get("GEMINI_API_KEY")
         if not key:
             raise RuntimeError("GEMINI_API_KEY not set")
         self._client = genai.Client(api_key=key)
-        self._model = model
+        self._model = model or os.environ.get("GEMINI_MODEL", DEFAULT_MODEL)
 
     def generate(self, prompt: str, system_instruction: str | None = None) -> dict:
         """Returns {text, usage: {prompt_tokens, response_tokens,
