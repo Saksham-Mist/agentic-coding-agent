@@ -1,0 +1,128 @@
+"""Worker node — step 3.3.
+
+One LLM call per attempt: writes a complete Python solution for the
+current subtask. On a retry, the prompt also carries the prior code
+and its failing test results, so the correction is based on the
+concrete failure (the design notes §2).
+
+Hidden test cases: the verifier runs them, but their inputs and
+expected outputs never reach this prompt — only a count of how many
+failed. Otherwise the retry loop would leak the hidden cases to the
+model (the design notes "Harness modes").
+"""
+from __future__ import annotations
+
+import json
+import re
+from typing import Any
+
+from .trace import Trace
+
+MAX_FAILURES_SHOWN = 5
+MAX_STDERR_CHARS = 1500
+
+SYSTEM_INSTRUCTION = (
+    "You are the coding step of an agent. Write one complete, "
+    "self-contained Python solution that matches the required signature "
+    "exactly. Use only the standard library. Do not print anything and do "
+    "not read input; the solution is called directly by a test harness. "
+    "If the task uses ListNode or TreeNode, those classes are already "
+    "defined; do not redefine them. Respond with a single ```python code "
+    "block and nothing else."
+)
+
+
+def _format_spec(spec: dict[str, Any], plan: dict[str, Any], subtask_index: int) -> str:
+    subtasks = "\n".join(
+        f"{i + 1}. {s}{'  <-- current' if i == subtask_index else ''}"
+        for i, s in enumerate(plan["subtasks"])
+    )
+    return (
+        f"Task:\n{spec['prompt']}\n\n"
+        f"Required signature:\n{spec['function_signature']}\n\n"
+        f"Constraints:\n{spec['constraints']}\n\n"
+        f"Example cases (input -> expected_output):\n"
+        f"{json.dumps(spec.get('test_cases', []))}\n\n"
+        f"Plan approach: {plan.get('approach', '')}\n"
+        f"Plan subtasks:\n{subtasks}\n\n"
+        "Write the full solution (not just the current subtask's part)."
+    )
+
+
+def format_feedback(prior_code: str, exec_result: dict[str, Any], visible_flags: list[bool]) -> str:
+    """Builds the retry context from execute_code's output.
+
+    `visible_flags[i]` says whether test_results[i] came from a visible
+    case. Hidden failures are reported as a count only."""
+    lines = [
+        "Your previous attempt failed.",
+        f"Previous code:\n```python\n{prior_code}\n```",
+        f"Execution status: {exec_result.get('status')}",
+    ]
+
+    results = exec_result.get("test_results", [])
+    visible_failures = [
+        r for r, vis in zip(results, visible_flags) if vis and not r.get("passed")
+    ]
+    hidden_failed = sum(
+        1 for r, vis in zip(results, visible_flags) if not vis and not r.get("passed")
+    )
+
+    for r in visible_failures[:MAX_FAILURES_SHOWN]:
+        lines.append(
+            f"FAILED input={json.dumps(r.get('input'))} "
+            f"expected={json.dumps(r.get('expected'))} "
+            f"actual={json.dumps(r.get('actual'))}"
+        )
+    if len(visible_failures) > MAX_FAILURES_SHOWN:
+        lines.append(f"...and {len(visible_failures) - MAX_FAILURES_SHOWN} more visible failures")
+    if hidden_failed:
+        lines.append(
+            f"{hidden_failed} hidden test(s) also failed (inputs not shown). "
+            "Check edge cases and constraints."
+        )
+
+    stderr = (exec_result.get("stderr") or "").strip()
+    if stderr:
+        lines.append(f"Error output (last {MAX_STDERR_CHARS} chars):\n{stderr[-MAX_STDERR_CHARS:]}")
+
+    lines.append("Fix the problem and return the full corrected solution.")
+    return "\n\n".join(lines)
+
+
+def _extract_code(text: str) -> str | None:
+    match = re.search(r"```(?:python)?\s*\n(.*?)```", text, re.DOTALL)
+    code = match.group(1) if match else text
+    code = code.strip()
+    return code or None
+
+
+def write_code(
+    spec: dict[str, Any],
+    plan: dict[str, Any],
+    subtask_index: int,
+    llm,
+    trace: Trace,
+    attempt: int = 1,
+    feedback: str | None = None,
+) -> dict[str, Any]:
+    """Returns {status: "ok", code, usage} or
+    {status: "error", reason, message, usage}. Never raises on bad
+    model output."""
+    prompt = _format_spec(spec, plan, subtask_index)
+    if feedback:
+        prompt += "\n\n" + feedback
+
+    result = llm.generate(prompt, system_instruction=SYSTEM_INSTRUCTION)
+    usage = result["usage"]
+    code = _extract_code(result["text"])
+
+    if code is None:
+        trace.event("worker_error", subtask=subtask_index, attempt=attempt,
+                    raw=result["text"], usage=usage)
+        return {"status": "error", "reason": "no_code",
+                "message": "worker output contained no code", "usage": usage}
+
+    trace.event("worker_code", subtask=subtask_index, attempt=attempt,
+                is_retry=feedback is not None, code=code, usage=usage)
+    return {"status": "ok", "code": code, "usage": usage}
