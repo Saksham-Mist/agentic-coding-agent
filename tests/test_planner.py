@@ -73,7 +73,10 @@ def test_prompt_contains_only_given_cases():
     assert "[2, 7, 11, 15]" in llm.calls[0]
 
 
-@pytest.mark.skipif(not os.environ.get("GEMINI_API_KEY"), reason="GEMINI_API_KEY not set")
+@pytest.mark.skipif(
+    not (os.environ.get("GEMINI_API_KEY") and os.environ.get("RUN_LIVE_LLM") == "1"),
+    reason="live LLM test; set RUN_LIVE_LLM=1 (free tier is 20 requests/day)",
+)
 def test_live_planner_produces_valid_plan():
     from agentic_coding_agent.agent.llm import GeminiClient
 

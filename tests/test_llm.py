@@ -14,8 +14,11 @@ load_dotenv()
 
 from agentic_coding_agent.agent.llm import GeminiClient
 
+# Opt-in: the free tier allows only 20 requests/day for this model,
+# so a normal pytest run must not spend them. Run with RUN_LIVE_LLM=1.
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("GEMINI_API_KEY"), reason="GEMINI_API_KEY not set"
+    not (os.environ.get("GEMINI_API_KEY") and os.environ.get("RUN_LIVE_LLM") == "1"),
+    reason="live LLM test; set RUN_LIVE_LLM=1 (free tier is 20 requests/day)",
 )
 
 
