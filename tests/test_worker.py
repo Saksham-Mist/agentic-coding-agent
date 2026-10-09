@@ -107,3 +107,65 @@ def test_live_worker_retry_fixes_wrong_code():
     assert result["status"] == "ok"
     assert "def two_sum" in result["code"]
     assert "return [0, 0]" not in result["code"]
+
+
+# --- diagnose-before-fix on retries ---
+
+DIAG_REPLY = (
+    "Diagnosis: the previous code always returned [0, 0] and never looked up "
+    "the complement of each number.\n\n"
+    "```python\ndef two_sum(nums, target):\n    seen = {}\n"
+    "    for i, n in enumerate(nums):\n        if target - n in seen:\n"
+    "            return [seen[target - n], i]\n        seen[n] = i\n```"
+)
+
+
+def test_retry_prompt_asks_for_diagnosis_first_attempt_does_not():
+    llm = FakeLLM(GOOD_REPLY)
+    write_code(SPEC, PLAN, 0, llm, Trace("d1"))
+    assert "Diagnosis" not in llm.prompts[0]
+
+    feedback = format_feedback(WRONG_CODE, EXEC_RESULT, VISIBLE)
+    write_code(SPEC, PLAN, 0, llm, Trace("d2"), attempt=2, feedback=feedback)
+    assert "First write 'Diagnosis:'" in llm.prompts[1]
+
+
+def test_diagnosis_is_extracted_and_traced():
+    trace = Trace("d3")
+    feedback = format_feedback(WRONG_CODE, EXEC_RESULT, VISIBLE)
+    result = write_code(SPEC, PLAN, 0, FakeLLM(DIAG_REPLY), trace, attempt=2, feedback=feedback)
+
+    assert result["status"] == "ok"
+    assert result["diagnosis"].startswith("the previous code always returned [0, 0]")
+    assert "Diagnosis:" not in result["diagnosis"]
+    assert result["code"].startswith("def two_sum")
+    assert "Diagnosis" not in result["code"]
+    assert trace.events[0]["diagnosis"] == result["diagnosis"]
+
+
+def test_markdown_bold_label_is_stripped():
+    reply = "**Diagnosis:** off by one in the loop.\n```python\ndef two_sum(n, t):\n    return [0, 1]\n```"
+    feedback = format_feedback(WRONG_CODE, EXEC_RESULT, VISIBLE)
+    result = write_code(SPEC, PLAN, 0, FakeLLM(reply), Trace("d4"), attempt=2, feedback=feedback)
+    assert result["diagnosis"] == "off by one in the loop."
+
+
+def test_missing_diagnosis_on_retry_still_uses_the_code():
+    feedback = format_feedback(WRONG_CODE, EXEC_RESULT, VISIBLE)
+    result = write_code(SPEC, PLAN, 0, FakeLLM(GOOD_REPLY), Trace("d5"), attempt=2, feedback=feedback)
+    assert result["status"] == "ok"
+    assert result["diagnosis"] is None
+    assert result["code"].startswith("def two_sum")
+
+
+def test_first_attempt_text_before_code_is_not_a_diagnosis():
+    reply = "Here you go:\n```python\ndef two_sum(n, t):\n    return [0, 1]\n```"
+    result = write_code(SPEC, PLAN, 0, FakeLLM(reply), Trace("d6"))
+    assert result["diagnosis"] is None
+
+
+def test_long_diagnosis_is_capped():
+    reply = "Diagnosis: " + "x" * 5000 + "\n```python\ndef two_sum(n, t):\n    return [0, 1]\n```"
+    feedback = format_feedback(WRONG_CODE, EXEC_RESULT, VISIBLE)
+    result = write_code(SPEC, PLAN, 0, FakeLLM(reply), Trace("d7"), attempt=2, feedback=feedback)
+    assert len(result["diagnosis"]) <= 600
