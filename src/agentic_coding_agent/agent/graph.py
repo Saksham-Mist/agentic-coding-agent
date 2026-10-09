@@ -25,6 +25,7 @@ from langgraph.graph import END, START, StateGraph
 from .catalog import get_task, read_test_spec
 from .planner import plan_task
 from .trace import Trace
+from .trace_log import fanout
 from .verifier import MAX_RETRIES, verify
 from .worker import format_feedback, write_code
 from ..sandbox.executor import execute_code
@@ -187,17 +188,20 @@ def run_task(
     executor: Callable[..., dict] = execute_code,
     run_id: str | None = None,
     store=None,
+    log=None,
 ) -> dict[str, Any]:
     """Run one task end to end. With a `store` (db.store.RunStore),
     every event is persisted as it happens, so the run can be resumed
-    with resume_run() after a crash. Returns {run_id, task_id, status,
-    reason, steps, tokens, code, passed, total, trace}."""
+    with resume_run() after a crash. `log` is an extra event sink
+    (trace_log.TraceLogWriter), called after the store so the log never
+    shows an event Postgres doesn't have. Returns {run_id, task_id,
+    status, reason, steps, tokens, code, passed, total, trace}."""
     limits = limits or Limits()
     run_id = run_id or str(uuid.uuid4())
     if store is not None:
         store.create_run(run_id, task_id)
-    sink = (lambda e: store.append_event(run_id, e)) if store is not None else None
-    trace = Trace(run_id, sink=sink)
+    store_sink = (lambda e: store.append_event(run_id, e)) if store is not None else None
+    trace = Trace(run_id, sink=fanout(store_sink, log))
 
     spec, task = _load_task(task_id)
     if task is None:
@@ -257,6 +261,7 @@ def resume_run(
     store,
     limits: Limits | None = None,
     executor: Callable[..., dict] = execute_code,
+    log=None,
 ) -> dict[str, Any]:
     """Continue a persisted run from its last saved event. A run that
     already finished returns its stored result without any calls."""
@@ -269,7 +274,8 @@ def resume_run(
     events = store.load_events(run_id)
     task_id = row["task_id"]
     spec, task = _load_task(task_id)
-    trace = Trace(run_id, sink=lambda e: store.append_event(run_id, e), events=events)
+    trace = Trace(run_id, sink=fanout(lambda e: store.append_event(run_id, e), log),
+                  events=events)
 
     finish_ev = next((e for e in events if e["kind"] == "finish"), None)
     if finish_ev is not None:
