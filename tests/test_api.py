@@ -7,6 +7,7 @@ a running uvicorn is checked separately.
 """
 import json
 import os
+import uuid
 import time
 from pathlib import Path
 
@@ -137,7 +138,7 @@ def test_queued_run_is_recovered_on_startup(tmp_path):
     from agentic_coding_agent.db.store import RunStore
 
     store = RunStore()
-    run_id = "00000000-0000-0000-0000-00000000c001"
+    run_id = str(uuid.uuid4())
     store.create_queued(run_id, "two_sum", source="test")
     try:
         # A run left queued (e.g. the server died before starting it)

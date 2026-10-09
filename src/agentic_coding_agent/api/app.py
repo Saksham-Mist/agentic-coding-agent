@@ -137,7 +137,15 @@ def owner_source(request: Request, owner_token: str | None) -> str | None:
 
 
 class RunWorker:
-    """Single background thread: runs are executed strictly one at a time."""
+    """Single background thread: runs are executed strictly one at a time.
+
+    stop() lets the run in progress finish, then exits without starting
+    anything else; runs still queued stay `queued` in Postgres and are
+    picked up at the next startup. (Before, stop() only queued a
+    sentinel behind pending runs and waited 5s, so the thread kept
+    working after shutdown -- in tests, into rows already deleted.)"""
+
+    STOP_TIMEOUT_SECONDS = 120
 
     def __init__(self, llm_factory: Callable[[], Any], executor, store_factory, log_dir):
         self._queue: queue.Queue[str | None] = queue.Queue()
@@ -145,14 +153,19 @@ class RunWorker:
         self._executor = executor
         self._store_factory = store_factory
         self._log_dir = log_dir
+        self._stopping = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="run-worker", daemon=True)
 
     def start(self) -> None:
         self._thread.start()
 
     def stop(self) -> None:
-        self._queue.put(None)
-        self._thread.join(timeout=5)
+        self._stopping.set()
+        self._queue.put(None)  # wake the thread if it's waiting on an empty queue
+        self._thread.join(timeout=self.STOP_TIMEOUT_SECONDS)
+        if self._thread.is_alive():
+            logger.warning("run worker still busy after %ss; leaving it to finish",
+                           self.STOP_TIMEOUT_SECONDS)
 
     def submit(self, run_id: str) -> None:
         self._queue.put(run_id)
@@ -160,7 +173,10 @@ class RunWorker:
     def _loop(self) -> None:
         store = self._store_factory()
         try:
-            while (run_id := self._queue.get()) is not None:
+            while not self._stopping.is_set():
+                run_id = self._queue.get()
+                if run_id is None or self._stopping.is_set():
+                    break
                 self._process(store, run_id)
         finally:
             store.close()

@@ -3,6 +3,7 @@ execution and no crash; runs execute one at a time (v1 is sequential).
 Fake LLM and executor, real Postgres.
 """
 import os
+import uuid
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -138,7 +139,7 @@ def test_two_workers_cannot_both_start_one_queued_run(tmp_path):
     from agentic_coding_agent.db.store import RunStore
 
     store = RunStore()
-    run_id = "00000000-0000-0000-0000-00000000d001"
+    run_id = str(uuid.uuid4())
     store.create_queued(run_id, "two_sum", source="test")
     executor = RecordingExecutor()
     workers = [RunWorker(FakeLLM, executor, RunStore, tmp_path) for _ in range(2)]
@@ -162,7 +163,7 @@ def test_two_workers_cannot_both_start_one_queued_run(tmp_path):
 def test_claim_is_exclusive():
     from agentic_coding_agent.db.store import RunStore
 
-    run_id = "00000000-0000-0000-0000-00000000d002"
+    run_id = str(uuid.uuid4())
     setup = RunStore()
     setup.create_queued(run_id, "two_sum", source="test")
 
@@ -181,3 +182,35 @@ def test_claim_is_exclusive():
     finally:
         setup.delete_run(run_id)
         setup.close()
+
+
+def test_stop_finishes_current_run_and_leaves_the_rest_queued(tmp_path):
+    """stop() must not keep draining the queue after shutdown: the run in
+    progress finishes, the others stay queued for the next startup."""
+    from agentic_coding_agent.api.app import RunWorker
+    from agentic_coding_agent.db.store import RunStore
+
+    store = RunStore()
+    run_ids = [str(uuid.uuid4()) for _ in range(3)]
+    for r in run_ids:
+        store.create_queued(r, "two_sum", source="test")
+    executor = RecordingExecutor()
+    worker = RunWorker(FakeLLM, executor, RunStore, tmp_path)
+    try:
+        worker.start()
+        for r in run_ids:
+            worker.submit(r)
+        # wait until the first run is underway, then stop
+        deadline = time.monotonic() + 60
+        while store.get_run(run_ids[0])["status"] == "queued" and time.monotonic() < deadline:
+            time.sleep(0.1)
+        worker.stop()
+
+        statuses = [store.get_run(r)["status"] for r in run_ids]
+        assert statuses[0] == "passed"          # the run in progress was allowed to finish
+        assert statuses[1:] == ["queued", "queued"]  # nothing new started after stop
+        assert len(executor.windows) == 1
+    finally:
+        for r in run_ids:
+            store.delete_run(r)
+        store.close()

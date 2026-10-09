@@ -5,6 +5,7 @@ real Postgres in DATABASE_URL and the local-only task catalog.
 """
 import io
 import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -131,11 +132,11 @@ def store():
 def test_log_matches_postgres_rows(store, tmp_path):
     from agentic_coding_agent.agent.graph import run_task
 
-    run_id = "00000000-0000-0000-0000-00000000b001"
+    run_id = str(uuid.uuid4())
     store.track(run_id)
     log = TraceLogWriter(run_id, log_dir=tmp_path, stream=None)
     result = run_task("two_sum", FakeLLM(), executor=fail_then_pass(), run_id=run_id,
-                      store=store, log=log)
+                      store=store, log=log, source="test")
     assert result["status"] == "passed"
 
     file_text = log.path.read_text(encoding="utf-8")
@@ -151,11 +152,11 @@ def test_log_matches_postgres_rows_across_crash_and_resume(store, tmp_path):
     def crash(*a, **kw):
         raise Crash()
 
-    run_id = "00000000-0000-0000-0000-00000000b002"
+    run_id = str(uuid.uuid4())
     store.track(run_id)
     with pytest.raises(Crash):
         run_task("two_sum", FakeLLM(), executor=crash, run_id=run_id, store=store,
-                 log=TraceLogWriter(run_id, log_dir=tmp_path, stream=None))
+                 log=TraceLogWriter(run_id, log_dir=tmp_path, stream=None), source="test")
 
     llm = FakeLLM()
     llm.writes = 1  # next write is the passing one

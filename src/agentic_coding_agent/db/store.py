@@ -29,13 +29,15 @@ class RunStore:
     def close(self) -> None:
         self._conn.close()
 
-    def create_run(self, run_id: str, task_id: str) -> None:
+    def create_run(self, run_id: str, task_id: str, source: str = "cli") -> None:
+        """Mark a run as running, creating its row if needed. An existing
+        row (e.g. queued by POST /runs) keeps its own source."""
         self._conn.execute(
             """
-            INSERT INTO runs (run_id, task_id, status) VALUES (%s, %s, 'running')
+            INSERT INTO runs (run_id, task_id, status, source) VALUES (%s, %s, 'running', %s)
             ON CONFLICT (run_id) DO UPDATE SET status = 'running', updated_at = now()
             """,
-            (run_id, task_id),
+            (run_id, task_id, source),
         )
 
     def mark_running(self, run_id: str) -> None:

@@ -7,6 +7,7 @@ inside the run, which nothing in the loop catches, same as the process
 dying at that point. The real process-kill check is done from the CLI.
 """
 import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -90,11 +91,11 @@ def store():
 def _start(store, llm, executor, run_id):
     store.track(run_id)
     with pytest.raises(Crash):
-        run_task("two_sum", llm, executor=executor, run_id=run_id, store=store)
+        run_task("two_sum", llm, executor=executor, run_id=run_id, store=store, source="test")
 
 
 def test_crash_during_execute_resumes_without_replanning(store):
-    run_id = "00000000-0000-0000-0000-00000000a001"
+    run_id = str(uuid.uuid4())
     _start(store, FakeLLM(), crashing, run_id)
 
     assert [e["kind"] for e in store.load_events(run_id)] == ["plan", "worker_code"]
@@ -111,7 +112,7 @@ def test_crash_during_execute_resumes_without_replanning(store):
 
 
 def test_crash_after_failed_attempt_resumes_with_feedback(store):
-    run_id = "00000000-0000-0000-0000-00000000a002"
+    run_id = str(uuid.uuid4())
     # attempt 1 fails and is verified (retry), attempt 2 crashes mid-execute
     _start(store, FakeLLM(), ScriptedExecutor(failing, crashing), run_id)
 
@@ -128,7 +129,7 @@ def test_crash_after_failed_attempt_resumes_with_feedback(store):
 def test_resume_after_verify_retry_uses_saved_feedback(store):
     from agentic_coding_agent.agent.graph import _state_from_events
 
-    run_id = "00000000-0000-0000-0000-00000000a003"
+    run_id = str(uuid.uuid4())
     # attempt 1 fails + verify(retry); crash happens inside the attempt-2 worker call
     class CrashOnSecondWrite(FakeLLM):
         def generate(self, prompt, system_instruction=None):
@@ -160,7 +161,7 @@ def test_resume_after_verify_retry_uses_saved_feedback(store):
 
 
 def test_crash_during_planning_resumes_at_plan(store):
-    run_id = "00000000-0000-0000-0000-00000000a004"
+    run_id = str(uuid.uuid4())
     _start(store, FakeLLM(crash_on_plan=True), passing, run_id)
     assert store.load_events(run_id) == []
 
@@ -171,9 +172,9 @@ def test_crash_during_planning_resumes_at_plan(store):
 
 
 def test_finished_run_resume_makes_no_calls(store):
-    run_id = "00000000-0000-0000-0000-00000000a005"
+    run_id = str(uuid.uuid4())
     store.track(run_id)
-    first = run_task("two_sum", FakeLLM(), executor=passing, run_id=run_id, store=store)
+    first = run_task("two_sum", FakeLLM(), executor=passing, run_id=run_id, store=store, source="test")
     assert first["status"] == "passed"
 
     llm = FakeLLM()
@@ -183,10 +184,10 @@ def test_finished_run_resume_makes_no_calls(store):
 
 
 def test_postgres_rows_match_trace(store):
-    run_id = "00000000-0000-0000-0000-00000000a006"
+    run_id = str(uuid.uuid4())
     store.track(run_id)
     result = run_task("two_sum", FakeLLM(), executor=ScriptedExecutor(failing, passing),
-                      run_id=run_id, store=store)
+                      run_id=run_id, store=store, source="test")
 
     rows = store.load_events(run_id)
     assert [(r["seq"], r["kind"]) for r in rows] == [(e["seq"], e["kind"]) for e in result["trace"]]

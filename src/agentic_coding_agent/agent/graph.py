@@ -189,6 +189,7 @@ def run_task(
     run_id: str | None = None,
     store=None,
     log=None,
+    source: str = "cli",
 ) -> dict[str, Any]:
     """Run one task end to end. With a `store` (db.store.RunStore),
     every event is persisted as it happens, so the run can be resumed
@@ -199,7 +200,7 @@ def run_task(
     limits = limits or Limits()
     run_id = run_id or str(uuid.uuid4())
     if store is not None:
-        store.create_run(run_id, task_id)
+        store.create_run(run_id, task_id, source=source)
     store_sink = (lambda e: store.append_event(run_id, e)) if store is not None else None
     trace = Trace(run_id, sink=fanout(store_sink, log))
 
