@@ -118,6 +118,8 @@ def validate_entry(entry: dict[str, Any]) -> list[str]:
         return problems
 
     ep = entry["entry_point"]
+    if entry.get("reviewed") is False:
+        problems.append("prompt/signature/constraints are an unreviewed draft (owner sets reviewed: true)")
     for key in ("prompt", "function_signature", "constraints"):
         if not str(entry[key]).strip():
             problems.append(f"{key} is empty")

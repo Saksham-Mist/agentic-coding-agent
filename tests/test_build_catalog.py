@@ -160,3 +160,16 @@ def test_check_reports_invalid_entries(tmp_path, capsys):
     cat.write_text(json.dumps([_entry("toy", "f")]))
     assert bc.check(cat) == 1
     assert "only 0 test cases" in capsys.readouterr().out
+
+
+def test_unreviewed_draft_builds_but_fails_check(tmp_path, capsys):
+    entry = _entry("toy_sort", "sort_it", reviewed=False)
+    cat, ref = _setup(tmp_path, entry, "def sort_it(nums):\n    return sorted(nums)\n", SORT_CASES)
+    bc.build_task("toy_sort", cat, ref)  # building isn't blocked by review status
+    assert bc.check(cat) == 1
+    assert "unreviewed draft" in capsys.readouterr().out
+
+    built = json.loads(cat.read_text())
+    built[0]["reviewed"] = True
+    cat.write_text(json.dumps(built))
+    assert bc.check(cat) == 0

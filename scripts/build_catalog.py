@@ -144,7 +144,9 @@ def build_task(task_id: str, catalog_path: Path = CATALOG, ref_dir: Path = REF_D
         test_cases.append(case)
 
     new_entry = {**entry, "test_cases": test_cases}
-    problems = validate_entry(new_entry)
+    # Building is allowed before the owner reviews the drafted text; only
+    # --check (the step 5.1 gate) requires reviewed entries.
+    problems = [p for p in validate_entry(new_entry) if "unreviewed draft" not in p]
     if problems:
         raise BuildError(f"{task_id}: built entry is invalid: {'; '.join(problems)}")
 
