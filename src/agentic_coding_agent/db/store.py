@@ -111,6 +111,17 @@ class RunStore:
             (run_id, task_id, source),
         )
 
+    def claim_queued(self, run_id: str) -> bool:
+        """Step 4.5: atomically move a run from queued to running. Only
+        one caller can win, so a queued run is never started twice, even
+        by two server processes."""
+        row = self._conn.execute(
+            "UPDATE runs SET status = 'running', updated_at = now() "
+            "WHERE run_id = %s AND status = 'queued' RETURNING run_id",
+            (run_id,),
+        ).fetchone()
+        return row is not None
+
     def mark_error(self, run_id: str, reason: str) -> None:
         """Last-resort status for a run whose worker crashed outright."""
         self._conn.execute(

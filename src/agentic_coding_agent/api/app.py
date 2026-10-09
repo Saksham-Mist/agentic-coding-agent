@@ -170,13 +170,23 @@ class RunWorker:
             row = store.get_run(run_id)
             if row is None or row["status"] not in ("queued", "running"):
                 return
+            if row["status"] == "queued":
+                # Claim before starting: a duplicate queue entry or a second
+                # server process loses the claim and skips the run.
+                if not store.claim_queued(run_id):
+                    return
+                fresh = True
+            else:
+                # "running" here means a run interrupted by a restart; v1
+                # runs one API process, so only this worker resumes it.
+                fresh = False
             log = TraceLogWriter(run_id, log_dir=self._log_dir)
             llm = self._llm_factory()
-            if row["status"] == "running" or store.load_events(run_id):
-                resume_run(run_id, llm, store, executor=self._executor, log=log)
-            else:
+            if fresh and not store.load_events(run_id):
                 run_task(row["task_id"], llm, executor=self._executor, run_id=run_id,
                          store=store, log=log)
+            else:
+                resume_run(run_id, llm, store, executor=self._executor, log=log)
         except Exception as e:  # never let one run kill the worker thread
             logger.exception("run %s crashed", run_id)
             store.mark_error(run_id, f"worker_error: {type(e).__name__}: {e}")
