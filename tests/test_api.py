@@ -242,3 +242,36 @@ def test_malformed_requests_are_rejected_or_ignored(counting_client, payload):
     assert r.status_code == 422
     assert _test_rows() == before
     assert CountingLLM.calls == 0
+
+
+def test_interrupted_running_run_is_resumed_on_startup(tmp_path):
+    """Startup recovery is the one place a 'running' run gets resumed."""
+    from fastapi.testclient import TestClient
+
+    from agentic_coding_agent.agent.graph import run_task
+    from agentic_coding_agent.api.app import create_app
+    from agentic_coding_agent.db.store import RunStore
+
+    class Crash(BaseException):
+        pass
+
+    def crashing(*a, **kw):
+        raise Crash()
+
+    store = RunStore()
+    run_id = str(uuid.uuid4())
+    try:
+        with pytest.raises(Crash):  # the "previous server" dies mid-run
+            run_task("two_sum", FakeLLM(), executor=crashing, run_id=run_id, store=store, source="test")
+        assert store.get_run(run_id)["status"] == "running"
+
+        app = create_app(llm_factory=FakeLLM, executor=passing, log_dir=tmp_path,
+                         run_source="test", rate_limit=10_000)
+        with TestClient(app) as c:
+            body = _wait(c, run_id)
+        assert body["status"] == "passed"
+        kinds = [e["kind"] for e in body["trace"]]
+        assert kinds.count("plan") == 1 and "resume" in kinds
+    finally:
+        store.delete_run(run_id)
+        store.close()

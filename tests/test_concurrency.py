@@ -214,3 +214,48 @@ def test_stop_finishes_current_run_and_leaves_the_rest_queued(tmp_path):
         for r in run_ids:
             store.delete_run(r)
         store.close()
+
+
+def test_second_worker_skips_a_run_another_worker_is_executing(tmp_path):
+    """Deterministic version of the two-process case: worker B is handed
+    the run only once worker A has it in 'running'. B must skip it, not
+    treat 'running' as interrupted and resume it in parallel. (Before
+    the fix B resumed it; their step rows collided and the run ended
+    as 'error'. The race version above passed only by timing luck.)"""
+    from agentic_coding_agent.api.app import RunWorker
+    from agentic_coding_agent.db.store import RunStore
+
+    class SlowExecutor(RecordingExecutor):
+        def __call__(self, *a, **kw):
+            # Hold worker A mid-run far longer than B needs for its few
+            # Postgres round trips (~0.3s each), so B always acts while
+            # A is executing. 2s wasn't enough: B sometimes arrived after
+            # A finished and the test passed against the buggy logic.
+            time.sleep(8)
+            return super().__call__(*a, **kw)
+
+    store = RunStore()
+    run_id = str(uuid.uuid4())
+    store.create_queued(run_id, "two_sum", source="test")
+    executor = SlowExecutor()
+    a = RunWorker(FakeLLM, executor, RunStore, tmp_path)
+    b = RunWorker(FakeLLM, executor, RunStore, tmp_path)
+    try:
+        a.start()
+        a.submit(run_id)
+        deadline = time.monotonic() + 60
+        while "worker_code" not in _kinds(store, run_id) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert store.get_run(run_id)["status"] == "running"
+        b.start()
+        b.submit(run_id)  # ordinary submission while A is mid-run
+        assert _wait_all(store, [run_id]) == ["passed"]
+        time.sleep(1)
+        assert _kinds(store, run_id).count("plan") == 1
+        assert "resume" not in _kinds(store, run_id)
+        assert len(executor.windows) == 1
+    finally:
+        a.stop()
+        b.stop()
+        store.delete_run(run_id)
+        store.close()

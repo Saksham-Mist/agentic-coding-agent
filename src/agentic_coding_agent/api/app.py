@@ -148,7 +148,7 @@ class RunWorker:
     STOP_TIMEOUT_SECONDS = 120
 
     def __init__(self, llm_factory: Callable[[], Any], executor, store_factory, log_dir):
-        self._queue: queue.Queue[str | None] = queue.Queue()
+        self._queue: queue.Queue[tuple[str, bool] | None] = queue.Queue()
         self._llm_factory = llm_factory
         self._executor = executor
         self._store_factory = store_factory
@@ -167,35 +167,44 @@ class RunWorker:
             logger.warning("run worker still busy after %ss; leaving it to finish",
                            self.STOP_TIMEOUT_SECONDS)
 
-    def submit(self, run_id: str) -> None:
-        self._queue.put(run_id)
+    def submit(self, run_id: str, recover: bool = False) -> None:
+        """Queue a run. `recover=True` only from startup recovery: it is
+        the one case where a `running` row means "interrupted, resume
+        it" rather than "another worker is executing it right now"."""
+        self._queue.put((run_id, recover))
 
     def _loop(self) -> None:
         store = self._store_factory()
         try:
             while not self._stopping.is_set():
-                run_id = self._queue.get()
-                if run_id is None or self._stopping.is_set():
+                item = self._queue.get()
+                if item is None or self._stopping.is_set():
                     break
-                self._process(store, run_id)
+                self._process(store, *item)
         finally:
             store.close()
 
-    def _process(self, store, run_id: str) -> None:
+    def _process(self, store, run_id: str, recover: bool = False) -> None:
         try:
             row = store.get_run(run_id)
             if row is None or row["status"] not in ("queued", "running"):
                 return
             if row["status"] == "queued":
                 # Claim before starting: a duplicate queue entry or a second
-                # server process loses the claim and skips the run.
+                # worker that also saw 'queued' loses the claim and skips.
                 if not store.claim_queued(run_id):
                     return
                 fresh = True
-            else:
-                # "running" here means a run interrupted by a restart; v1
-                # runs one API process, so only this worker resumes it.
+            elif recover:
+                # Startup recovery: 'running' means the previous server died
+                # mid-run. v1 runs one API process, so only this worker
+                # resumes it (not claim-protected across processes).
                 fresh = False
+            else:
+                # 'running' on an ordinary submission means someone else is
+                # executing it right now. Resuming here would run it twice
+                # (seen in testing: two workers' step rows collided).
+                return
             log = TraceLogWriter(run_id, log_dir=self._log_dir)
             llm = self._llm_factory()
             if fresh and not store.load_events(run_id):
@@ -239,7 +248,7 @@ def create_app(
         worker.start()
         for run in api_store["store"].list_unfinished():
             logger.info("recovering run %s (%s)", run["run_id"], run["status"])
-            worker.submit(run["run_id"])
+            worker.submit(run["run_id"], recover=True)
         yield
         worker.stop()
         api_store["store"].close()

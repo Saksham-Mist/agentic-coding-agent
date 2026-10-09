@@ -16,3 +16,7 @@ logs/
 /*.md
 !/README.md
 /task_catalog.json
+
+# Reference solutions and case generators are the answer key: local only.
+/reference/*
+!/reference/.gitkeep

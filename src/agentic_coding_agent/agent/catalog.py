@@ -94,3 +94,65 @@ def read_test_spec(task_id: str, path: Path | None = None) -> dict[str, Any]:
         "test_cases": visible_cases,
         "constraints": entry.get("constraints", ""),
     }
+
+
+# --- step 5.1: catalog entry validation (the design notes rules) ---
+
+COMPARATORS = {"exact", "unordered", "unordered_nested", "ops_sequence"}
+ARG_TYPES = {"linked_list", "tree", "linked_list_list"}
+RETURN_TYPES = {"linked_list", "tree"}
+MIN_CASES = 8
+
+
+def validate_entry(entry: dict[str, Any]) -> list[str]:
+    """Returns a list of problems (empty = valid). Rules: prompt,
+    signature and constraints filled; signature defines entry_point;
+    known comparator/arg types; >= 8 cases with at least one visible,
+    one hidden and one marked max_size; well-formed class-mode cases."""
+    problems: list[str] = []
+    for key in ("task_id", "entry_point", "comparator", "prompt", "function_signature",
+                "constraints", "test_cases"):
+        if key not in entry:
+            problems.append(f"missing field: {key}")
+    if problems:
+        return problems
+
+    ep = entry["entry_point"]
+    for key in ("prompt", "function_signature", "constraints"):
+        if not str(entry[key]).strip():
+            problems.append(f"{key} is empty")
+    sig = entry["function_signature"]
+    if sig.strip() and f"def {ep}(" not in sig and f"class {ep}" not in sig:
+        problems.append(f"function_signature does not define entry_point {ep!r}")
+    if entry["comparator"] not in COMPARATORS:
+        problems.append(f"unknown comparator {entry['comparator']!r}")
+    for arg, t in (entry.get("arg_types") or {}).items():
+        if t not in ARG_TYPES:
+            problems.append(f"arg_types[{arg!r}] has unknown type {t!r}")
+    if entry.get("return_type") not in (None, *RETURN_TYPES):
+        problems.append(f"unknown return_type {entry['return_type']!r}")
+
+    cases = entry["test_cases"]
+    if len(cases) < MIN_CASES:
+        problems.append(f"only {len(cases)} test cases (need >= {MIN_CASES})")
+    for i, c in enumerate(cases):
+        if not isinstance(c.get("input"), dict) or "expected_output" not in c \
+                or not isinstance(c.get("visible"), bool):
+            problems.append(f"case {i}: needs input (object), expected_output and visible (bool)")
+            continue
+        if entry["comparator"] == "ops_sequence":
+            ops, args = c["input"].get("operations"), c["input"].get("arguments")
+            if not isinstance(ops, list) or not isinstance(args, list) or len(ops) != len(args):
+                problems.append(f"case {i}: class mode needs operations/arguments of equal length")
+    if cases and not any(c.get("visible") for c in cases):
+        problems.append("no visible case")
+    if cases and all(c.get("visible") for c in cases):
+        problems.append("no hidden case")
+    if cases and not any(c.get("max_size") for c in cases):
+        problems.append("no case marked max_size")
+    return problems
+
+
+def validate_catalog(path: Path | None = None) -> dict[str, list[str]]:
+    """{task_id: problems} for every entry; all-empty lists = valid."""
+    return {tid: validate_entry(e) for tid, e in load_catalog(path).items()}

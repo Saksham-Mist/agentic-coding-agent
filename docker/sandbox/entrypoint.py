@@ -14,6 +14,7 @@ and attached to that case's result (stdout/stderr/error), so hidden
 cases' data never mixes into the shared output the agent sees.
 """
 import contextlib
+import copy
 import io
 import json
 import sys
@@ -188,7 +189,10 @@ def _run_function_mode(namespace, entry_point, test_cases, comparator, arg_types
         expected = case["expected_output"]
 
         def call(raw_input=raw_input):
-            return _convert_output(fn(**_convert_input(raw_input, arg_types or {})), return_type)
+            # deepcopy: a solution may sort or modify its input in place,
+            # which must not change the input reported back (or stored).
+            converted = _convert_input(copy.deepcopy(raw_input), arg_types or {})
+            return _convert_output(fn(**converted), return_type)
 
         actual, out, err, error = _run_case(call)
         passed = error is None and _compare(actual, expected, comparator)
@@ -204,7 +208,8 @@ def _run_class_mode(namespace, entry_point, test_cases):
         expected = case["expected_output"]
 
         def call(raw_input=raw_input):
-            operations, arguments = raw_input["operations"], raw_input["arguments"]
+            operations = raw_input["operations"]
+            arguments = copy.deepcopy(raw_input["arguments"])
             obj = cls(*arguments[0])
             recorded = [None]
             for op, args in zip(operations[1:], arguments[1:]):
