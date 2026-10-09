@@ -104,6 +104,72 @@ class RunStore:
             rows = cur.fetchall()
         return [r[0] for r in rows]
 
+    def create_queued(self, run_id: str, task_id: str, source: str = "api") -> None:
+        """POST /runs: the run exists (status queued) before any work starts."""
+        self._conn.execute(
+            "INSERT INTO runs (run_id, task_id, status, source) VALUES (%s, %s, 'queued', %s)",
+            (run_id, task_id, source),
+        )
+
+    def mark_error(self, run_id: str, reason: str) -> None:
+        """Last-resort status for a run whose worker crashed outright."""
+        self._conn.execute(
+            "UPDATE runs SET status = 'error', result = %s, updated_at = now() WHERE run_id = %s",
+            (Jsonb({"status": "error", "reason": reason}), run_id),
+        )
+
+    def list_unfinished(self) -> list[dict[str, Any]]:
+        """Runs a restarted server must pick up again, oldest first."""
+        rows = self._conn.execute(
+            "SELECT run_id, task_id, status FROM runs WHERE status IN ('queued', 'running') "
+            "ORDER BY created_at"
+        ).fetchall()
+        return [{"run_id": str(r[0]), "task_id": r[1], "status": r[2]} for r in rows]
+
+    def stats(self) -> dict[str, Any]:
+        """Aggregates for GET /stats, per source and overall (excluding test runs)."""
+        rows = self._conn.execute(
+            """
+            SELECT source,
+                   count(*) FILTER (WHERE status IN ('passed', 'incomplete', 'error')) AS finished,
+                   count(*) FILTER (WHERE status = 'passed') AS passed,
+                   count(*) FILTER (WHERE status IN ('queued', 'running')) AS in_progress,
+                   avg(steps_taken) FILTER (WHERE status = 'passed') AS avg_steps_passed,
+                   avg(tokens_used) FILTER (WHERE status IN ('passed', 'incomplete', 'error')) AS avg_tokens,
+                   avg(extract(epoch FROM updated_at - created_at))
+                       FILTER (WHERE status IN ('passed', 'incomplete', 'error')) AS avg_seconds
+            FROM runs GROUP BY source ORDER BY source
+            """
+        ).fetchall()
+        overall = self._conn.execute(
+            """
+            SELECT count(*) FILTER (WHERE status IN ('passed', 'incomplete', 'error')),
+                   count(*) FILTER (WHERE status = 'passed'),
+                   count(*) FILTER (WHERE status IN ('queued', 'running')),
+                   avg(steps_taken) FILTER (WHERE status = 'passed'),
+                   avg(tokens_used) FILTER (WHERE status IN ('passed', 'incomplete', 'error')),
+                   avg(extract(epoch FROM updated_at - created_at))
+                       FILTER (WHERE status IN ('passed', 'incomplete', 'error'))
+            FROM runs WHERE source <> 'test'
+            """
+        ).fetchone()
+
+        def shape(finished, passed, in_progress, avg_steps, avg_tokens, avg_seconds):
+            return {
+                "finished_runs": finished,
+                "passed": passed,
+                "success_rate": round(passed / finished, 3) if finished else None,
+                "in_progress": in_progress,
+                "avg_steps_passed": round(float(avg_steps), 2) if avg_steps is not None else None,
+                "avg_tokens_per_run": round(float(avg_tokens)) if avg_tokens is not None else None,
+                "avg_wall_clock_seconds": round(float(avg_seconds), 1) if avg_seconds is not None else None,
+            }
+
+        return {
+            "overall_excluding_test": shape(*overall),
+            "by_source": {r[0]: shape(*r[1:]) for r in rows},
+        }
+
     def delete_run(self, run_id: str) -> None:
         """For tests/fixtures; steps cascade."""
         self._conn.execute("DELETE FROM runs WHERE run_id = %s", (run_id,))

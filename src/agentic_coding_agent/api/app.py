@@ -1,0 +1,183 @@
+"""Public API — step 4.1.
+
+    POST /runs        {task_id} -> 202 {run_id, status: queued}
+    GET  /runs/{id}   status, counters and the public trace
+    GET  /stats       success rate / steps / tokens / wall clock
+
+Execution model (the design notes §9): POST only inserts a `queued` row
+and returns; one background worker thread runs queued runs one at a
+time, so v1 stays sequential. On startup the worker re-queues anything
+left `queued` or `running`, and running ones resume from their last
+saved step (step 3.6), so a server restart doesn't lose runs.
+
+Run with:  uvicorn agentic_coding_agent.api.app:app
+"""
+from __future__ import annotations
+
+import logging
+import queue
+import threading
+import uuid
+from contextlib import asynccontextmanager
+from typing import Any, Callable
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+load_dotenv()
+
+from ..agent.catalog import get_task  # noqa: E402
+from ..agent.graph import resume_run, run_task  # noqa: E402
+from ..agent.trace_log import TraceLogWriter  # noqa: E402
+from ..db.store import RunStore  # noqa: E402
+from ..sandbox.executor import execute_code  # noqa: E402
+
+logger = logging.getLogger("agentic_coding_agent.api")
+
+
+class RunRequest(BaseModel):
+    task_id: str
+
+
+def public_trace(events: list[dict[str, Any]], task: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The trace as the public may see it. The stored trace contains
+    every hidden test case (the full sandbox result) and anything the
+    model's code printed; returning it would publish the answer key.
+    Keep only visible test results, drop stdout/stderr and the
+    internal retry feedback."""
+    flags = [c.get("visible", False) for c in task["test_cases"]] if task else []
+    out = []
+    for e in events:
+        e = dict(e)
+        if e["kind"] == "execute" and isinstance(e.get("result"), dict):
+            results = e["result"].get("test_results") or []
+            e["result"] = {
+                "status": e["result"].get("status"),
+                "visible_test_results": [r for r, vis in zip(results, flags) if vis],
+            }
+        if e["kind"] == "verify":
+            e.pop("feedback", None)
+        out.append(e)
+    return out
+
+
+class RunWorker:
+    """Single background thread: runs are executed strictly one at a time."""
+
+    def __init__(self, llm_factory: Callable[[], Any], executor, store_factory, log_dir):
+        self._queue: queue.Queue[str | None] = queue.Queue()
+        self._llm_factory = llm_factory
+        self._executor = executor
+        self._store_factory = store_factory
+        self._log_dir = log_dir
+        self._thread = threading.Thread(target=self._loop, name="run-worker", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._queue.put(None)
+        self._thread.join(timeout=5)
+
+    def submit(self, run_id: str) -> None:
+        self._queue.put(run_id)
+
+    def _loop(self) -> None:
+        store = self._store_factory()
+        try:
+            while (run_id := self._queue.get()) is not None:
+                self._process(store, run_id)
+        finally:
+            store.close()
+
+    def _process(self, store, run_id: str) -> None:
+        try:
+            row = store.get_run(run_id)
+            if row is None or row["status"] not in ("queued", "running"):
+                return
+            log = TraceLogWriter(run_id, log_dir=self._log_dir)
+            llm = self._llm_factory()
+            if row["status"] == "running" or store.load_events(run_id):
+                resume_run(run_id, llm, store, executor=self._executor, log=log)
+            else:
+                run_task(row["task_id"], llm, executor=self._executor, run_id=run_id,
+                         store=store, log=log)
+        except Exception as e:  # never let one run kill the worker thread
+            logger.exception("run %s crashed", run_id)
+            store.mark_error(run_id, f"worker_error: {type(e).__name__}: {e}")
+
+
+def create_app(
+    llm_factory: Callable[[], Any] | None = None,
+    executor=execute_code,
+    store_factory: Callable[[], Any] = RunStore,
+    log_dir=None,
+    run_source: str = "api",
+) -> FastAPI:
+    """`run_source` tags runs created through POST /runs; tests pass
+    "test" so their runs never count toward the public stats."""
+    if llm_factory is None:
+        from ..agent.llm import GeminiClient
+        llm_factory = GeminiClient
+
+    worker = RunWorker(llm_factory, executor, store_factory, log_dir)
+    api_store = {"store": None}
+    store_lock = threading.Lock()  # psycopg connections aren't safe to share across threads
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        api_store["store"] = store_factory()
+        worker.start()
+        for run in api_store["store"].list_unfinished():
+            logger.info("recovering run %s (%s)", run["run_id"], run["status"])
+            worker.submit(run["run_id"])
+        yield
+        worker.stop()
+        api_store["store"].close()
+
+    app = FastAPI(title="Agentic Coding Agent", lifespan=lifespan)
+    app.state.worker = worker
+
+    def store():
+        return api_store["store"]
+
+    @app.post("/runs", status_code=202)
+    def create_run(req: RunRequest) -> dict[str, Any]:
+        run_id = str(uuid.uuid4())
+        with store_lock:
+            store().create_queued(run_id, req.task_id, source=run_source)
+        worker.submit(run_id)
+        return {"run_id": run_id, "status": "queued"}
+
+    @app.get("/runs/{run_id}")
+    def get_run(run_id: str) -> dict[str, Any]:
+        try:
+            uuid.UUID(run_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="run not found")
+        with store_lock:
+            row = store().get_run(run_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="run not found")
+            events = store().load_events(run_id)
+        task = get_task(row["task_id"])
+        return {
+            "run_id": row["run_id"],
+            "task_id": row["task_id"],
+            "status": row["status"],
+            "steps": row["steps_taken"],
+            "tokens": row["tokens_used"],
+            "result": row["result"],
+            "trace": public_trace(events, task),
+        }
+
+    @app.get("/stats")
+    def get_stats() -> dict[str, Any]:
+        with store_lock:
+            return store().stats()
+
+    return app
+
+
+app = create_app()
