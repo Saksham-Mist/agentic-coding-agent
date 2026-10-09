@@ -14,6 +14,7 @@ Run with:  uvicorn agentic_coding_agent.api.app:app
 """
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import queue
@@ -112,6 +113,29 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+OWNER_SOURCES = {"cli", "eval"}
+
+
+def owner_source(request: Request, owner_token: str | None) -> str | None:
+    """Step 4.4: the owner's requests skip the rate limit
+    (the design notes §9, "operator's own credentials").
+
+    No Authorization header -> None (public caller). A bearer token that
+    matches OWNER_TOKEN -> the run source ("cli", or "eval" via
+    X-Run-Source). Any other Authorization header -> 401, so a wrong
+    token fails loudly instead of quietly hitting the public limit."""
+    header = request.headers.get("authorization")
+    if header is None:
+        return None
+    scheme, _, token = header.partition(" ")
+    if not owner_token or scheme.lower() != "bearer" or not hmac.compare_digest(
+        token.encode(), owner_token.encode()
+    ):
+        raise HTTPException(status_code=401, detail={"reason": "invalid_owner_token"})
+    source = request.headers.get("x-run-source", "cli")
+    return source if source in OWNER_SOURCES else "cli"
+
+
 class RunWorker:
     """Single background thread: runs are executed strictly one at a time."""
 
@@ -165,6 +189,7 @@ def create_app(
     log_dir=None,
     run_source: str = "api",
     rate_limit: int | None = None,
+    owner_token: str | None = None,
 ) -> FastAPI:
     """`run_source` tags runs created through POST /runs; tests pass
     "test" so their runs never count toward the public stats.
@@ -172,6 +197,8 @@ def create_app(
     RATE_LIMIT_RUNS_PER_DAY, else 5; the design notes)."""
     if rate_limit is None:
         rate_limit = int(os.environ.get("RATE_LIMIT_RUNS_PER_DAY", 5))
+    if owner_token is None:
+        owner_token = os.environ.get("OWNER_TOKEN") or None
     if llm_factory is None:
         from ..agent.llm import GeminiClient
         llm_factory = GeminiClient
@@ -204,11 +231,12 @@ def create_app(
         # a row or reaches the worker, so it costs no tokens or sandbox
         # time (the design notes "Public abuse limits").
         validate_task_id(req.task_id)
+        owner = owner_source(request, owner_token)
         ip = client_ip(request)
         run_id = str(uuid.uuid4())
         with store_lock:
-            used = store().consume_rate_limit(ip, rate_limit)
-            if used is None:
+            used = None if owner else store().consume_rate_limit(ip, rate_limit)
+            if not owner and used is None:
                 retry_after = seconds_until_utc_midnight()
                 raise HTTPException(
                     status_code=429,
@@ -220,7 +248,7 @@ def create_app(
                     },
                     headers={"Retry-After": str(retry_after)},
                 )
-            store().create_queued(run_id, req.task_id, source=run_source)
+            store().create_queued(run_id, req.task_id, source=owner or run_source)
         worker.submit(run_id)
         return {"run_id": run_id, "status": "queued"}
 
