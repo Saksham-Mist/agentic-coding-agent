@@ -51,7 +51,7 @@ def client(tmp_path):
     from agentic_coding_agent.api.app import create_app
     from agentic_coding_agent.db.store import RunStore
 
-    app = create_app(llm_factory=FakeLLM, executor=passing, log_dir=tmp_path, run_source="test")
+    app = create_app(llm_factory=FakeLLM, executor=passing, log_dir=tmp_path, run_source="test", rate_limit=10_000)
     cleanup = RunStore()
     created = []
     with TestClient(app) as c:
@@ -59,6 +59,7 @@ def client(tmp_path):
         yield c
     for run_id in created:
         cleanup.delete_run(run_id)
+    cleanup.delete_rate_limit("testclient")
     cleanup.close()
 
 
@@ -141,7 +142,7 @@ def test_queued_run_is_recovered_on_startup(tmp_path):
     try:
         # A run left queued (e.g. the server died before starting it)
         # must be picked up when a new server starts.
-        app = create_app(llm_factory=FakeLLM, executor=passing, log_dir=tmp_path, run_source="test")
+        app = create_app(llm_factory=FakeLLM, executor=passing, log_dir=tmp_path, run_source="test", rate_limit=10_000)
         with TestClient(app) as c:
             body = _wait(c, run_id)
         assert body["status"] == "passed"
@@ -184,13 +185,14 @@ def _shared_counting_client(tmp_path_factory):
     from agentic_coding_agent.db.store import RunStore
 
     app = create_app(llm_factory=CountingLLM, executor=passing,
-                     log_dir=tmp_path_factory.mktemp("logs"), run_source="test")
+                     log_dir=tmp_path_factory.mktemp("logs"), run_source="test", rate_limit=10_000)
     cleanup = RunStore()
     with TestClient(app) as c:
         c.created = []
         yield c
     for run_id in c.created:
         cleanup.delete_run(run_id)
+    cleanup.delete_rate_limit("testclient")
     cleanup.close()
 
 

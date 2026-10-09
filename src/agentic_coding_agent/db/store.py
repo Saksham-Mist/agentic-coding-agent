@@ -170,6 +170,28 @@ class RunStore:
             "by_source": {r[0]: shape(*r[1:]) for r in rows},
         }
 
+    def consume_rate_limit(self, ip: str, limit: int) -> int | None:
+        """Step 4.3: count one run against `ip` for today (UTC).
+
+        Returns the new count, or None if `ip` already used `limit` runs
+        today. One statement, so concurrent requests can't both take
+        the last slot."""
+        row = self._conn.execute(
+            """
+            INSERT INTO rate_limits (ip, day, count)
+            VALUES (%(ip)s, (now() AT TIME ZONE 'utc')::date, 1)
+            ON CONFLICT (ip, day) DO UPDATE SET count = rate_limits.count + 1
+                WHERE rate_limits.count < %(limit)s
+            RETURNING count
+            """,
+            {"ip": ip, "limit": limit},
+        ).fetchone()
+        return row[0] if row else None
+
+    def delete_rate_limit(self, ip: str) -> None:
+        """For tests."""
+        self._conn.execute("DELETE FROM rate_limits WHERE ip = %s", (ip,))
+
     def delete_run(self, run_id: str) -> None:
         """For tests/fixtures; steps cascade."""
         self._conn.execute("DELETE FROM runs WHERE run_id = %s", (run_id,))

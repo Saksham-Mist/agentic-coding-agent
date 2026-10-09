@@ -15,14 +15,16 @@ Run with:  uvicorn agentic_coding_agent.api.app:app
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import threading
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 load_dotenv()
@@ -94,6 +96,22 @@ def public_trace(events: list[dict[str, Any]], task: dict[str, Any] | None) -> l
     return out
 
 
+def seconds_until_utc_midnight(now: datetime | None = None) -> int:
+    now = now or datetime.now(timezone.utc)
+    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(1, int((tomorrow - now).total_seconds()))
+
+
+def client_ip(request: Request) -> str:
+    """The caller's IP as uvicorn reports it. Behind nginx (Phase 6) run
+    uvicorn with --proxy-headers --forwarded-allow-ips=127.0.0.1 so this
+    is the visitor's address taken from nginx's header, which uvicorn
+    only trusts when the request really came from nginx. Reading
+    X-Forwarded-For here directly would let anyone dodge the limit by
+    setting that header themselves."""
+    return request.client.host if request.client else "unknown"
+
+
 class RunWorker:
     """Single background thread: runs are executed strictly one at a time."""
 
@@ -146,9 +164,14 @@ def create_app(
     store_factory: Callable[[], Any] = RunStore,
     log_dir=None,
     run_source: str = "api",
+    rate_limit: int | None = None,
 ) -> FastAPI:
     """`run_source` tags runs created through POST /runs; tests pass
-    "test" so their runs never count toward the public stats."""
+    "test" so their runs never count toward the public stats.
+    `rate_limit` is runs per IP per UTC day (default
+    RATE_LIMIT_RUNS_PER_DAY, else 5; the design notes)."""
+    if rate_limit is None:
+        rate_limit = int(os.environ.get("RATE_LIMIT_RUNS_PER_DAY", 5))
     if llm_factory is None:
         from ..agent.llm import GeminiClient
         llm_factory = GeminiClient
@@ -175,10 +198,28 @@ def create_app(
         return api_store["store"]
 
     @app.post("/runs", status_code=202)
-    def create_run(req: RunRequest) -> dict[str, Any]:
+    def create_run(req: RunRequest, request: Request) -> dict[str, Any]:
+        # Order matters: a bad task_id is rejected without using up one
+        # of the caller's runs, and a rate-limited request never creates
+        # a row or reaches the worker, so it costs no tokens or sandbox
+        # time (the design notes "Public abuse limits").
         validate_task_id(req.task_id)
+        ip = client_ip(request)
         run_id = str(uuid.uuid4())
         with store_lock:
+            used = store().consume_rate_limit(ip, rate_limit)
+            if used is None:
+                retry_after = seconds_until_utc_midnight()
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "reason": "rate_limited",
+                        "message": f"limit of {rate_limit} runs per IP per day reached",
+                        "limit": rate_limit,
+                        "retry_after_seconds": retry_after,
+                    },
+                    headers={"Retry-After": str(retry_after)},
+                )
             store().create_queued(run_id, req.task_id, source=run_source)
         worker.submit(run_id)
         return {"run_id": run_id, "status": "queued"}
