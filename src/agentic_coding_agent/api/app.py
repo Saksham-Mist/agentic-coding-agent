@@ -23,11 +23,11 @@ from typing import Any, Callable
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 load_dotenv()
 
-from ..agent.catalog import get_task  # noqa: E402
+from ..agent.catalog import CatalogLoadError, get_task, load_catalog  # noqa: E402
 from ..agent.graph import resume_run, run_task  # noqa: E402
 from ..agent.trace_log import TraceLogWriter  # noqa: E402
 from ..db.store import RunStore  # noqa: E402
@@ -37,7 +37,39 @@ logger = logging.getLogger("agentic_coding_agent.api")
 
 
 class RunRequest(BaseModel):
-    task_id: str
+    # Catalog ids are short snake_case names; anything else is rejected
+    # before it reaches any code (step 4.2).
+    task_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+
+
+def _is_ready(entry: dict[str, Any]) -> bool:
+    """A catalog entry can run only once it's filled in: a stub with no
+    prompt or test cases would spend LLM calls and could never pass."""
+    return bool(entry.get("prompt") and entry.get("function_signature") and entry.get("test_cases"))
+
+
+def validate_task_id(task_id: str) -> None:
+    """Step 4.2: POST /runs only runs ready entries of the fixed catalog
+    (the design notes "Public abuse limits"). Raises 422 otherwise, before
+    any run row exists or any LLM call is made."""
+    try:
+        catalog = load_catalog()
+    except CatalogLoadError:
+        raise HTTPException(status_code=503, detail={"reason": "catalog_unavailable"})
+    ready = sorted(t for t, e in catalog.items() if _is_ready(e))
+    entry = catalog.get(task_id)
+    if entry is None:
+        raise HTTPException(status_code=422, detail={
+            "reason": "unknown_task_id",
+            "message": f"'{task_id}' is not in the task catalog",
+            "available_task_ids": ready,
+        })
+    if not _is_ready(entry):
+        raise HTTPException(status_code=422, detail={
+            "reason": "task_not_ready",
+            "message": f"'{task_id}' is in the catalog but not filled in yet",
+            "available_task_ids": ready,
+        })
 
 
 def public_trace(events: list[dict[str, Any]], task: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -144,6 +176,7 @@ def create_app(
 
     @app.post("/runs", status_code=202)
     def create_run(req: RunRequest) -> dict[str, Any]:
+        validate_task_id(req.task_id)
         run_id = str(uuid.uuid4())
         with store_lock:
             store().create_queued(run_id, req.task_id, source=run_source)

@@ -148,3 +148,94 @@ def test_queued_run_is_recovered_on_startup(tmp_path):
     finally:
         store.delete_run(run_id)
         store.close()
+
+
+# --- step 4.2: catalog-only validation ---
+
+_count_conn = None
+
+
+def _test_rows():
+    # One reused connection: a fresh Neon connection costs ~3s from the
+    # dev machine (TLS + auth over a ~290ms link).
+    global _count_conn
+    import psycopg
+
+    if _count_conn is None or _count_conn.closed:
+        _count_conn = psycopg.connect(os.environ["DATABASE_URL"], autocommit=True)
+    return _count_conn.execute("SELECT count(*) FROM runs WHERE source = 'test'").fetchone()[0]
+
+
+class CountingLLM(FakeLLM):
+    calls = 0
+
+    def generate(self, prompt, system_instruction=None):
+        CountingLLM.calls += 1
+        return super().generate(prompt, system_instruction)
+
+
+@pytest.fixture(scope="module")
+def _shared_counting_client(tmp_path_factory):
+    # One API instance for all validation tests: starting one per test
+    # meant new Neon connections each time (~8s per test).
+    from fastapi.testclient import TestClient
+
+    from agentic_coding_agent.api.app import create_app
+    from agentic_coding_agent.db.store import RunStore
+
+    app = create_app(llm_factory=CountingLLM, executor=passing,
+                     log_dir=tmp_path_factory.mktemp("logs"), run_source="test")
+    cleanup = RunStore()
+    with TestClient(app) as c:
+        c.created = []
+        yield c
+    for run_id in c.created:
+        cleanup.delete_run(run_id)
+    cleanup.close()
+
+
+@pytest.fixture
+def counting_client(_shared_counting_client):
+    CountingLLM.calls = 0
+    return _shared_counting_client
+
+
+@pytest.mark.parametrize("payload, reason", [
+    ({"task_id": "no_such_task"}, "unknown_task_id"),
+    ({"task_id": "reverse_integer"}, "task_not_ready"),  # catalog stub, not filled in yet
+])
+def test_rejected_task_ids_create_no_run(counting_client, payload, reason):
+    before = _test_rows()
+    r = counting_client.post("/runs", json=payload)
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert detail["reason"] == reason
+    assert "two_sum" in detail["available_task_ids"]
+    assert "reverse_integer" not in detail["available_task_ids"]
+    time.sleep(1)  # give the worker a chance to (wrongly) pick something up
+    assert _test_rows() == before
+    assert CountingLLM.calls == 0
+
+
+@pytest.mark.parametrize("payload", [
+    {"task_id": "../../etc/passwd"},
+    {"task_id": "Two_Sum"},
+    {"task_id": "x" * 65},
+    {"task_id": ""},
+    {"task_id": 123},
+    {"task": "two_sum"},
+    {"task_id": "two_sum", "code": "import os"},  # extra fields are ignored, never executed
+])
+def test_malformed_requests_are_rejected_or_ignored(counting_client, payload):
+    before = _test_rows()
+    r = counting_client.post("/runs", json=payload)
+    if "code" in payload:
+        # Only task_id is read; the run uses the catalog's own code-free spec.
+        assert r.status_code == 202
+        run_id = r.json()["run_id"]
+        counting_client.created.append(run_id)
+        _wait(counting_client, run_id)  # don't delete under the worker's feet
+        return
+    assert r.status_code == 422
+    assert _test_rows() == before
+    assert CountingLLM.calls == 0
