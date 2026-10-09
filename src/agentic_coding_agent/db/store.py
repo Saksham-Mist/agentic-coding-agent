@@ -1,0 +1,109 @@
+"""Postgres run store — step 3.6.
+
+Every trace event is written as a `steps` row together with the
+`runs` row update (status, step and token counters), in one SQL
+statement: atomic on its own, and one round trip instead of four
+(Neon is ~290ms away from the dev machine). Postgres is the source of
+truth for resuming a crashed run (the design notes §5, §7).
+"""
+from __future__ import annotations
+
+import json
+import os
+from typing import Any
+
+import psycopg
+from psycopg.types.json import Jsonb
+
+_LLM_EVENTS = {"plan", "plan_error", "worker_code", "worker_error"}
+
+
+class RunStore:
+    def __init__(self, url: str | None = None):
+        url = url or os.environ.get("DATABASE_URL")
+        if not url:
+            raise RuntimeError("DATABASE_URL not set")
+        # autocommit: each statement below is its own atomic transaction
+        self._conn = psycopg.connect(url, autocommit=True)
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def create_run(self, run_id: str, task_id: str) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO runs (run_id, task_id, status) VALUES (%s, %s, 'running')
+            ON CONFLICT (run_id) DO UPDATE SET status = 'running', updated_at = now()
+            """,
+            (run_id, task_id),
+        )
+
+    def mark_running(self, run_id: str) -> None:
+        self._conn.execute(
+            "UPDATE runs SET status = 'running', updated_at = now() WHERE run_id = %s", (run_id,)
+        )
+
+    def append_event(self, run_id: str, event: dict[str, Any]) -> None:
+        kind = event["kind"]
+        payload = json.loads(json.dumps(event, default=str))
+        usage = event.get("usage") or {}
+        is_llm = kind in _LLM_EVENTS
+        is_finish = kind == "finish"
+        self._conn.execute(
+            """
+            WITH ins AS (
+                INSERT INTO steps (run_id, step_number, kind, payload, subtask, code,
+                                   execution_result, verifier_decision)
+                VALUES (%(run_id)s, %(seq)s, %(kind)s, %(payload)s, %(subtask)s, %(code)s,
+                        %(exec_result)s, %(decision)s)
+                RETURNING run_id
+            )
+            UPDATE runs SET
+                steps_taken = steps_taken + %(step_inc)s,
+                tokens_used = tokens_used + %(token_inc)s,
+                status = COALESCE(%(status)s, status),
+                result = COALESCE(%(result)s, result),
+                updated_at = now()
+            WHERE run_id = (SELECT run_id FROM ins)
+            """,
+            {
+                "run_id": run_id, "seq": event["seq"], "kind": kind, "payload": Jsonb(payload),
+                "subtask": str(event["subtask"]) if "subtask" in event else None,
+                "code": event.get("code"),
+                "exec_result": Jsonb(payload["result"]) if kind == "execute" and "result" in payload else None,
+                "decision": event.get("decision") if kind == "verify" else None,
+                "step_inc": 1 if is_llm else 0,
+                "token_inc": int(usage.get("total_tokens", 0)) if is_llm else 0,
+                "status": event["status"] if is_finish else None,
+                "result": Jsonb(payload) if is_finish else None,
+            },
+        )
+
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT run_id, task_id, status, steps_taken, tokens_used, result "
+                "FROM runs WHERE run_id = %s",
+                (run_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        keys = ("run_id", "task_id", "status", "steps_taken", "tokens_used", "result")
+        out = dict(zip(keys, row))
+        out["run_id"] = str(out["run_id"])
+        return out
+
+    def load_events(self, run_id: str) -> list[dict[str, Any]]:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT payload FROM steps WHERE run_id = %s AND payload IS NOT NULL "
+                "ORDER BY step_number",
+                (run_id,),
+            )
+            rows = cur.fetchall()
+        return [r[0] for r in rows]
+
+    def delete_run(self, run_id: str) -> None:
+        """For tests/fixtures; steps cascade."""
+        self._conn.execute("DELETE FROM runs WHERE run_id = %s", (run_id,))
