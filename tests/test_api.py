@@ -105,10 +105,13 @@ def test_public_trace_never_contains_hidden_cases(client):
     hidden = [c for c in task["test_cases"] if not c["visible"]]
     visible = [c for c in task["test_cases"] if c["visible"]]
     assert hidden
+    # Match whole input objects (nums + target): matching only the nums
+    # list gave a false alarm once the catalog was rebuilt, because a
+    # hidden case's nums [1, 2] equals a visible case's expected output.
     for c in hidden:
-        assert json.dumps(c["input"]["nums"]) not in text, "hidden input leaked"
+        assert json.dumps(c["input"]) not in text, f"hidden input leaked: {c['input']}"
     for c in visible:
-        assert json.dumps(c["input"]["nums"]) in text  # visible results are still shown
+        assert json.dumps(c["input"]) in text  # visible results are still shown
 
     execute = next(e for e in body["trace"] if e["kind"] == "execute")
     assert "stdout" not in execute["result"]

@@ -59,7 +59,8 @@ def test_happy_path_passes_and_stops_early():
     assert result["steps"] == 2
     assert llm.calls == 2
     assert kinds(result) == ["plan", "worker_code", "execute", "verify", "finish"]
-    assert result["passed"] == result["total"] == 7
+    from agentic_coding_agent.agent.catalog import get_task
+    assert result["passed"] == result["total"] == len(get_task("two_sum")["test_cases"])
 
 
 def test_retry_limit_yields_incomplete():
