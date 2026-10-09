@@ -8,6 +8,10 @@ Reads a JSON payload from stdin:
 
 Prints the the design notes output shape to stdout. See
 the design notes "Harness modes" for what each comparator/mode means.
+
+Each test case's printed output and exception are captured separately
+and attached to that case's result (stdout/stderr/error), so hidden
+cases' data never mixes into the shared output the agent sees.
 """
 import contextlib
 import io
@@ -138,56 +142,78 @@ def _compare(actual, expected, comparator: str) -> bool:
     return False
 
 
-def _run_function_mode(namespace, entry_point, test_cases, comparator, arg_types, return_type,
-                        stdout_buf, stderr_buf):
+MAX_CASE_OUTPUT_CHARS = 2000
+
+
+def _case_error() -> str:
+    """The current exception's traceback, trimmed from the front so the
+    exception line itself (at the end) is always kept."""
+    tb = traceback.format_exc()
+    return tb[-MAX_CASE_OUTPUT_CHARS:]
+
+
+def _run_case(fn_call):
+    """Runs one test case with its own stdout/stderr capture. Returns
+    (value, stdout, stderr, error). Everything a case prints or raises
+    stays attached to that case's result, never to the shared output,
+    so the caller can show visible cases' details without exposing
+    hidden ones (their inputs can appear in printed text and in
+    exception messages, e.g. KeyError: <input value>)."""
+    out, err = io.StringIO(), io.StringIO()
+    value, error = None, None
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            value = fn_call()
+    except Exception:
+        error = _case_error()
+    return value, out.getvalue()[-MAX_CASE_OUTPUT_CHARS:], err.getvalue()[-MAX_CASE_OUTPUT_CHARS:], error
+
+
+def _result(raw_input, expected, actual, passed, stdout, stderr, error):
+    r = {"input": raw_input, "expected": expected, "actual": actual, "passed": passed}
+    if stdout:
+        r["stdout"] = stdout
+    if stderr:
+        r["stderr"] = stderr
+    if error:
+        r["error"] = error
+    return r
+
+
+def _run_function_mode(namespace, entry_point, test_cases, comparator, arg_types, return_type):
     fn = namespace[entry_point]
     test_results = []
     for case in test_cases:
         raw_input = case["input"]
         expected = case["expected_output"]
-        try:
-            converted_input = _convert_input(raw_input, arg_types or {})
-            with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-                raw_actual = fn(**converted_input)
-            actual = _convert_output(raw_actual, return_type)
-            test_results.append({
-                "input": raw_input, "expected": expected, "actual": actual,
-                "passed": _compare(actual, expected, comparator),
-            })
-        except Exception:
-            test_results.append({
-                "input": raw_input, "expected": expected, "actual": None,
-                "passed": False,
-            })
-            stderr_buf.write(traceback.format_exc())
+
+        def call(raw_input=raw_input):
+            return _convert_output(fn(**_convert_input(raw_input, arg_types or {})), return_type)
+
+        actual, out, err, error = _run_case(call)
+        passed = error is None and _compare(actual, expected, comparator)
+        test_results.append(_result(raw_input, expected, actual, passed, out, err, error))
     return test_results
 
 
-def _run_class_mode(namespace, entry_point, test_cases, stdout_buf, stderr_buf):
+def _run_class_mode(namespace, entry_point, test_cases):
     cls = namespace[entry_point]
     test_results = []
     for case in test_cases:
         raw_input = case["input"]
         expected = case["expected_output"]
-        operations = raw_input["operations"]
-        arguments = raw_input["arguments"]
-        try:
-            with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-                obj = cls(*arguments[0])
-                recorded = [None]
-                for op, args in zip(operations[1:], arguments[1:]):
-                    method = getattr(obj, op)
-                    recorded.append(method(*args))
-            test_results.append({
-                "input": raw_input, "expected": expected, "actual": recorded,
-                "passed": recorded == expected,
-            })
-        except Exception:
-            test_results.append({
-                "input": raw_input, "expected": expected, "actual": None,
-                "passed": False,
-            })
-            stderr_buf.write(traceback.format_exc())
+
+        def call(raw_input=raw_input):
+            operations, arguments = raw_input["operations"], raw_input["arguments"]
+            obj = cls(*arguments[0])
+            recorded = [None]
+            for op, args in zip(operations[1:], arguments[1:]):
+                recorded.append(getattr(obj, op)(*args))
+            return recorded
+
+        actual, out, err, error = _run_case(call)
+        passed = error is None and actual == expected
+        test_results.append(_result(raw_input, expected, actual, passed, out, err, error))
     return test_results
 
 
@@ -227,12 +253,13 @@ def main() -> None:
         }))
         return
 
+    # From here on the shared stdout/stderr only hold load-time output
+    # (from exec above); per-case output lives on each test result.
     if comparator == "ops_sequence":
-        test_results = _run_class_mode(namespace, entry_point, test_cases, stdout_buf, stderr_buf)
+        test_results = _run_class_mode(namespace, entry_point, test_cases)
     else:
         test_results = _run_function_mode(
             namespace, entry_point, test_cases, comparator, arg_types, return_type,
-            stdout_buf, stderr_buf,
         )
 
     overall_status = "pass" if all(r["passed"] for r in test_results) else "fail"

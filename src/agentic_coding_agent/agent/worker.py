@@ -26,6 +26,7 @@ from .trace import Trace
 MAX_FAILURES_SHOWN = 5
 MAX_STDERR_CHARS = 1500
 MAX_DIAGNOSIS_CHARS = 600
+MAX_CASE_ERROR_CHARS = 600
 
 SYSTEM_INSTRUCTION = (
     "You are the coding step of an agent. Write one complete, "
@@ -75,11 +76,16 @@ def format_feedback(prior_code: str, exec_result: dict[str, Any], visible_flags:
     )
 
     for r in visible_failures[:MAX_FAILURES_SHOWN]:
-        lines.append(
+        line = (
             f"FAILED input={json.dumps(r.get('input'))} "
             f"expected={json.dumps(r.get('expected'))} "
             f"actual={json.dumps(r.get('actual'))}"
         )
+        # Per-case error text lives only on the case it came from, so it
+        # is shown for visible cases and never for hidden ones.
+        if r.get("error"):
+            line += f"\n  raised: {r['error'].strip()[-MAX_CASE_ERROR_CHARS:]}"
+        lines.append(line)
     if len(visible_failures) > MAX_FAILURES_SHOWN:
         lines.append(f"...and {len(visible_failures) - MAX_FAILURES_SHOWN} more visible failures")
     if hidden_failed:
@@ -88,6 +94,8 @@ def format_feedback(prior_code: str, exec_result: dict[str, Any], visible_flags:
             "Check edge cases and constraints."
         )
 
+    # The shared stderr holds only load-time errors (syntax, missing
+    # entry point), never per-case output, so it carries no test data.
     stderr = (exec_result.get("stderr") or "").strip()
     if stderr:
         lines.append(f"Error output (last {MAX_STDERR_CHARS} chars):\n{stderr[-MAX_STDERR_CHARS:]}")
