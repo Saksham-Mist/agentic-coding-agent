@@ -205,6 +205,67 @@ class RunStore:
         """For tests."""
         self._conn.execute("DELETE FROM rate_limits WHERE ip = %s", (ip,))
 
+    # --- step 5.2: eval batches ---
+
+    def create_eval_batch(self, label: str | None, command: str, git_commit: str | None,
+                          model: str | None, repeats: int, task_ids: list[str]) -> str:
+        row = self._conn.execute(
+            """
+            INSERT INTO eval_batches (label, command, git_commit, model, repeats, task_ids)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING batch_id
+            """,
+            (label, command, git_commit, model, repeats, Jsonb(task_ids)),
+        ).fetchone()
+        return str(row[0])
+
+    def add_eval_run(self, batch_id: str, task_id: str, repeat: int,
+                     run_id: str | None, error: str | None = None) -> None:
+        self._conn.execute(
+            "INSERT INTO eval_runs (batch_id, task_id, repeat, run_id, error) VALUES (%s, %s, %s, %s, %s)",
+            (batch_id, task_id, repeat, run_id, error),
+        )
+
+    def finish_eval_batch(self, batch_id: str) -> None:
+        self._conn.execute("UPDATE eval_batches SET finished_at = now() WHERE batch_id = %s", (batch_id,))
+
+    def eval_batch(self, batch_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT batch_id, label, command, git_commit, model, repeats, task_ids, started_at, finished_at "
+            "FROM eval_batches WHERE batch_id = %s",
+            (batch_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        keys = ("batch_id", "label", "command", "git_commit", "model", "repeats", "task_ids",
+                "started_at", "finished_at")
+        return dict(zip(keys, row))
+
+    def eval_rows(self, batch_id: str) -> list[dict[str, Any]]:
+        """One row per (task, repeat) with the run's outcome. Wall clock is
+        first to last step event, so time spent queued isn't counted."""
+        rows = self._conn.execute(
+            """
+            SELECT e.task_id, e.repeat, e.run_id, e.error, r.status, r.steps_taken, r.tokens_used,
+                   extract(epoch FROM (SELECT max(created_at) - min(created_at)
+                                       FROM steps s WHERE s.run_id = e.run_id)) AS seconds
+            FROM eval_runs e LEFT JOIN runs r ON r.run_id = e.run_id
+            WHERE e.batch_id = %s ORDER BY e.task_id, e.repeat
+            """,
+            (batch_id,),
+        ).fetchall()
+        keys = ("task_id", "repeat", "run_id", "error", "status", "steps", "tokens", "seconds")
+        out = []
+        for r in rows:
+            d = dict(zip(keys, r))
+            d["run_id"] = str(d["run_id"]) if d["run_id"] else None
+            d["seconds"] = float(d["seconds"]) if d["seconds"] is not None else None
+            out.append(d)
+        return out
+
+    def delete_eval_batch(self, batch_id: str) -> None:
+        """For tests; eval_runs cascade (runs are deleted separately)."""
+        self._conn.execute("DELETE FROM eval_batches WHERE batch_id = %s", (batch_id,))
+
     def delete_run(self, run_id: str) -> None:
         """For tests/fixtures; steps cascade."""
         self._conn.execute("DELETE FROM runs WHERE run_id = %s", (run_id,))
