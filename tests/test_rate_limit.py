@@ -123,7 +123,9 @@ def test_limit_is_per_ip(make_client):
 def test_invalid_task_id_does_not_use_a_slot(make_client):
     c = make_client("203.0.113.30", limit=1)
     assert c.post("/runs", json={"task_id": "no_such_task"}).status_code == 422
-    assert c.post("/runs", json={"task_id": "reverse_integer"}).status_code == 422
+    from agentic_coding_agent.agent.catalog import load_catalog, validate_entry
+    not_ready = next(t for t, e in load_catalog().items() if validate_entry(e))
+    assert c.post("/runs", json={"task_id": not_ready}).status_code == 422
     assert c.post("/runs", json={"task_id": "two_sum"}).status_code == 202
 
 

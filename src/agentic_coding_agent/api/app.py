@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
-from ..agent.catalog import CatalogLoadError, get_task, load_catalog  # noqa: E402
+from ..agent.catalog import CatalogLoadError, get_task, load_catalog, validate_entry  # noqa: E402
 from ..agent.graph import resume_run, run_task  # noqa: E402
 from ..agent.trace_log import TraceLogWriter  # noqa: E402
 from ..db.store import RunStore  # noqa: E402
@@ -46,9 +46,12 @@ class RunRequest(BaseModel):
 
 
 def _is_ready(entry: dict[str, Any]) -> bool:
-    """A catalog entry can run only once it's filled in: a stub with no
-    prompt or test cases would spend LLM calls and could never pass."""
-    return bool(entry.get("prompt") and entry.get("function_signature") and entry.get("test_cases"))
+    """A catalog entry is runnable only if it passes the full catalog
+    validation (validate_entry): owner-reviewed prompt, >= 8 cases, a
+    max-size case, etc. A weaker "has a prompt and some test cases"
+    rule once let a 1-case entry with an unreviewed drafted prompt
+    through, and would let the eval run on unapproved prompts."""
+    return not validate_entry(entry)
 
 
 def validate_task_id(task_id: str) -> None:

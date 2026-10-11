@@ -206,18 +206,31 @@ def counting_client(_shared_counting_client):
     return _shared_counting_client
 
 
+def _not_ready_task():
+    """A catalog entry that doesn't pass validation (stub or unreviewed),
+    picked from the catalog itself so the test survives catalog builds."""
+    from agentic_coding_agent.agent.catalog import load_catalog, validate_entry
+
+    return next(t for t, e in load_catalog().items() if validate_entry(e))
+
+
 @pytest.mark.parametrize("payload, reason", [
     ({"task_id": "no_such_task"}, "unknown_task_id"),
-    ({"task_id": "reverse_integer"}, "task_not_ready"),  # catalog stub, not filled in yet
+    ({"task_id": None}, "task_not_ready"),  # filled in with _not_ready_task()
 ])
 def test_rejected_task_ids_create_no_run(counting_client, payload, reason):
+    not_ready = _not_ready_task()
+    if payload["task_id"] is None:
+        payload = {"task_id": not_ready}
     before = _test_rows()
     r = counting_client.post("/runs", json=payload)
     assert r.status_code == 422
     detail = r.json()["detail"]
     assert detail["reason"] == reason
     assert "two_sum" in detail["available_task_ids"]
-    assert "reverse_integer" not in detail["available_task_ids"]
+    assert not_ready not in detail["available_task_ids"]
+    from agentic_coding_agent.agent.catalog import load_catalog, validate_entry
+    assert all(not validate_entry(load_catalog()[t]) for t in detail["available_task_ids"])
     time.sleep(1)  # give the worker a chance to (wrongly) pick something up
     assert _test_rows() == before
     assert CountingLLM.calls == 0
