@@ -132,3 +132,13 @@ def test_rejected_submission_is_recorded_not_raised(env):
 def test_runnable_tasks_matches_api_rule():
     from agentic_coding_agent.agent.catalog import load_catalog, validate_entry
     assert ev.runnable_tasks() == sorted(t for t, e in load_catalog().items() if not validate_entry(e))
+
+
+def test_eval_sets_are_separate(monkeypatch):
+    from agentic_coding_agent.agent.catalog import load_catalog
+
+    real = load_catalog()
+    stress = {**real["two_sum"], "task_id": "zz_stress_copy", "set": "stress"}
+    monkeypatch.setattr(ev, "load_catalog", lambda path=None: {**real, "zz_stress_copy": stress})
+    assert "zz_stress_copy" not in ev.runnable_tasks()          # default = main
+    assert ev.runnable_tasks("stress") == ["zz_stress_copy"]

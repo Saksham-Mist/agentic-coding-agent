@@ -300,3 +300,46 @@ def test_interrupted_running_run_is_resumed_on_startup(tmp_path):
     finally:
         store.delete_run(run_id)
         store.close()
+
+
+# --- stress set: owner-only twisted tasks ---
+
+@pytest.fixture
+def with_stress_task(monkeypatch):
+    """A fully valid owner-only stress entry (a copy of two_sum tagged
+    set=stress), patched into the catalog the API sees."""
+    import agentic_coding_agent.api.app as app_module
+    from agentic_coding_agent.agent.catalog import load_catalog
+
+    real = load_catalog()
+    stress = {**real["two_sum"], "task_id": "zz_stress_copy", "set": "stress"}
+    monkeypatch.setattr(app_module, "load_catalog", lambda path=None: {**real, "zz_stress_copy": stress})
+    return "zz_stress_copy"
+
+
+def test_public_caller_cannot_see_or_run_stress_tasks(counting_client, with_stress_task):
+    r = counting_client.post("/runs", json={"task_id": with_stress_task})
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert detail["reason"] == "unknown_task_id"          # looks unknown, doesn't reveal the set
+    assert with_stress_task not in detail["available_task_ids"]
+    assert CountingLLM.calls == 0
+
+
+def test_owner_can_run_stress_tasks(tmp_path, with_stress_task):
+    from fastapi.testclient import TestClient
+
+    from agentic_coding_agent.api.app import create_app
+    from agentic_coding_agent.db.store import RunStore
+
+    app = create_app(llm_factory=FakeLLM, executor=passing, log_dir=tmp_path, run_source="test",
+                     rate_limit=10_000, owner_token="owner-secret-for-test")
+    store = RunStore()
+    with TestClient(app) as c:
+        r = c.post("/runs", json={"task_id": with_stress_task},
+                   headers={"Authorization": "Bearer owner-secret-for-test"})
+        assert r.status_code == 202
+        run_id = r.json()["run_id"]
+        _wait(c, run_id)
+    store.delete_run(run_id)
+    store.close()

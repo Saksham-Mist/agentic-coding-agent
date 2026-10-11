@@ -34,7 +34,7 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from agentic_coding_agent.agent.catalog import load_catalog, validate_entry  # noqa: E402
+from agentic_coding_agent.agent.catalog import load_catalog, task_set, validate_entry  # noqa: E402
 from agentic_coding_agent.agent.llm import DEFAULT_MODEL  # noqa: E402
 
 DEFAULT_REPEATS = 3          # the design notes section 6: runs per task
@@ -50,11 +50,15 @@ DIFFICULTY = {
     "binary_tree_level_order_traversal": "Medium", "course_schedule": "Medium",
     "coin_change": "Medium", "number_of_islands": "Medium", "lru_cache": "Hard",
     "merge_k_sorted_lists": "Hard", "trapping_rain_water": "Hard", "word_ladder": "Hard",
+    # stress set (twisted variants; difficulty is my estimate, not the design notes')
+    "stairs_no_double_two": "Medium", "rain_water_with_drains": "Hard",
+    "two_sum_value_pairs": "Medium", "anagram_groups_sorted": "Medium",
 }
 
 
-def runnable_tasks() -> list[str]:
-    return sorted(t for t, e in load_catalog().items() if not validate_entry(e))
+def runnable_tasks(which: str = "main") -> list[str]:
+    return sorted(t for t, e in load_catalog().items()
+                  if not validate_entry(e) and task_set(e) == which)
 
 
 def git_commit() -> str | None:
@@ -191,6 +195,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Run the eval through the API and print the results table.")
     ap.add_argument("--tasks", nargs="*", help="default: every task the API currently serves")
     ap.add_argument("--repeats", type=int, default=DEFAULT_REPEATS)
+    ap.add_argument("--set", dest="task_set", choices=["main", "stress"], default="main",
+                    help="main = the 18-task eval (default); stress = owner-only twisted variants")
     ap.add_argument("--label", help="free-text label stored with the batch, e.g. 'milestone-10'")
     ap.add_argument("--report", metavar="BATCH_ID", help="print the table for a past batch and exit")
     args = ap.parse_args(argv)
@@ -204,8 +210,8 @@ def main(argv: list[str] | None = None) -> int:
         if not token:
             print("OWNER_TOKEN is not set; the eval goes through the owner path", file=sys.stderr)
             return 2
-        task_ids = args.tasks or runnable_tasks()
-        not_ready = [t for t in task_ids if t not in runnable_tasks()]
+        task_ids = args.tasks or runnable_tasks(args.task_set)
+        not_ready = [t for t in task_ids if t not in runnable_tasks(args.task_set)]
         if not_ready:
             print(f"not runnable (not in catalog or not fully validated): {not_ready}", file=sys.stderr)
             return 2

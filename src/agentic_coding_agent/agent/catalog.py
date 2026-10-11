@@ -102,6 +102,13 @@ COMPARATORS = {"exact", "unordered", "unordered_nested", "ops_sequence"}
 ARG_TYPES = {"linked_list", "tree", "linked_list_list"}
 RETURN_TYPES = {"linked_list", "tree"}
 MIN_CASES = 8
+# "main" = the 18-task eval set served publicly; "stress" = owner-only
+# twisted variants used to exercise retries (the design notes decision log).
+TASK_SETS = {"main", "stress"}
+
+
+def task_set(entry: dict[str, Any]) -> str:
+    return entry.get("set", "main")
 
 
 def validate_entry(entry: dict[str, Any]) -> list[str]:
@@ -126,6 +133,8 @@ def validate_entry(entry: dict[str, Any]) -> list[str]:
     sig = entry["function_signature"]
     if sig.strip() and f"def {ep}(" not in sig and f"class {ep}" not in sig:
         problems.append(f"function_signature does not define entry_point {ep!r}")
+    if task_set(entry) not in TASK_SETS:
+        problems.append(f"unknown set {entry.get('set')!r}")
     if entry["comparator"] not in COMPARATORS:
         problems.append(f"unknown comparator {entry['comparator']!r}")
     for arg, t in (entry.get("arg_types") or {}).items():

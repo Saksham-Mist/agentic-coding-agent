@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
-from ..agent.catalog import CatalogLoadError, get_task, load_catalog, validate_entry  # noqa: E402
+from ..agent.catalog import CatalogLoadError, get_task, load_catalog, task_set, validate_entry  # noqa: E402
 from ..agent.graph import resume_run, run_task  # noqa: E402
 from ..agent.trace_log import TraceLogWriter  # noqa: E402
 from ..db.store import RunStore  # noqa: E402
@@ -54,14 +54,17 @@ def _is_ready(entry: dict[str, Any]) -> bool:
     return not validate_entry(entry)
 
 
-def validate_task_id(task_id: str) -> None:
+def validate_task_id(task_id: str, owner: bool = False) -> None:
     """Step 4.2: POST /runs only runs ready entries of the fixed catalog
     (the design notes "Public abuse limits"). Raises 422 otherwise, before
-    any run row exists or any LLM call is made."""
+    any run row exists or any LLM call is made. Public callers only see
+    the main set; owner-only "stress" tasks look unknown to them."""
     try:
         catalog = load_catalog()
     except CatalogLoadError:
         raise HTTPException(status_code=503, detail={"reason": "catalog_unavailable"})
+    if not owner:
+        catalog = {t: e for t, e in catalog.items() if task_set(e) == "main"}
     ready = sorted(t for t, e in catalog.items() if _is_ready(e))
     entry = catalog.get(task_id)
     if entry is None:
@@ -268,8 +271,9 @@ def create_app(
         # of the caller's runs, and a rate-limited request never creates
         # a row or reaches the worker, so it costs no tokens or sandbox
         # time (the design notes "Public abuse limits").
-        validate_task_id(req.task_id)
+        # Owner check first: it decides which task sets are allowed.
         owner = owner_source(request, owner_token)
+        validate_task_id(req.task_id, owner=bool(owner))
         ip = client_ip(request)
         run_id = str(uuid.uuid4())
         with store_lock:

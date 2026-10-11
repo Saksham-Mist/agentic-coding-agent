@@ -200,12 +200,17 @@ def dump_catalog(entries: list[dict[str, Any]]) -> str:
 
 def check(catalog_path: Path = CATALOG) -> int:
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-    bad = 0
+    bad, per_set = 0, {}
     for e in catalog:
         problems = validate_entry(e)
         bad += bool(problems)
+        name = e.get("set", "main")
+        ok, total = per_set.get(name, (0, 0))
+        per_set[name] = (ok + (not problems), total + 1)
         print(f"{e['task_id']:38} {'OK' if not problems else '; '.join(problems)}")
-    print(f"\n{len(catalog) - bad}/{len(catalog)} entries valid")
+    print()
+    for name, (ok, total) in per_set.items():
+        print(f"{name}: {ok}/{total} entries valid")
     return 0 if bad == 0 else 1
 
 
