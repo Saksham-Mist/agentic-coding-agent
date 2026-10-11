@@ -135,3 +135,36 @@ def test_retry_feedback_reaches_worker():
     assert "previous attempt failed" not in prompts[1]
     assert "Your previous attempt failed" in prompts[2]
     assert "hidden test(s) also failed" in prompts[2]
+
+
+def test_stored_execute_event_keeps_no_hidden_case_data():
+    """Hidden inputs/expected/actual never go into the trace (and so never
+    into Postgres): they're the answer key and can be very large."""
+    import json
+
+    from agentic_coding_agent.agent.catalog import get_task
+
+    task = get_task("two_sum")
+    hidden = [c for c in task["test_cases"] if not c["visible"]]
+
+    def failing_with_errors(code, language, cases, **kw):
+        return {"status": "fail", "stdout": "", "stderr": "",
+                "test_results": [{"input": c["input"], "expected": c["expected_output"],
+                                  "actual": None, "passed": False,
+                                  "error": f"Traceback...\nKeyError: {c['input']['nums'][0]}"}
+                                 for c in cases]}
+
+    result = run_task("two_sum", FakeLLM(), limits=Limits(max_retries=0, max_steps=15, max_tokens=100_000),
+                      executor=failing_with_errors)
+    execute = next(e for e in result["trace"] if e["kind"] == "execute")
+    stored = execute["result"]["test_results"]
+    assert len(stored) == len(task["test_cases"])
+    text = json.dumps(execute)
+    for c in hidden:
+        assert json.dumps(c["input"]) not in text
+    hidden_entries = [r for r in stored if r.get("hidden")]
+    assert len(hidden_entries) == len(hidden)
+    assert all(set(r) <= {"hidden", "passed", "error"} for r in hidden_entries)
+    assert all(r["error"] == "KeyError" for r in hidden_entries)  # type only, no value
+    visible_entries = [r for r in stored if not r.get("hidden")]
+    assert all("input" in r and "expected" in r for r in visible_entries)

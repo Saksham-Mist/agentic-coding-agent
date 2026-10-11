@@ -55,6 +55,31 @@ class RunState(TypedDict, total=False):
     verdict: dict[str, Any]
 
 
+MAX_STORED_CASE_ERROR_CHARS = 300
+
+
+def compact_result(result: dict[str, Any], visible_flags: list[bool]) -> dict[str, Any]:
+    """The execute result as stored in the trace (and so in Postgres).
+
+    Visible cases keep full detail. Hidden cases keep only whether they
+    passed and a short error: their inputs/expected/actual are the
+    answer key, and max-size inputs are large (a 10^5-element case made
+    each stored attempt ~1.2 MB). Nothing reads hidden detail back:
+    retry feedback is built from the in-memory result, and resume
+    re-executes or uses the feedback saved on the verify event."""
+    compact = []
+    for r, visible in zip(result.get("test_results") or [], visible_flags):
+        if visible:
+            compact.append(r)
+        else:
+            c = {"hidden": True, "passed": r.get("passed")}
+            if r.get("error"):
+                # Exception type only: the message can contain the input.
+                c["error"] = r["error"].strip().splitlines()[-1].split(":", 1)[0][:MAX_STORED_CASE_ERROR_CHARS]
+            compact.append(c)
+    return {**result, "test_results": compact}
+
+
 def _limit_hit(state: RunState, limits: Limits) -> str | None:
     if state["steps"] >= limits.max_steps:
         return "step_limit"
@@ -116,8 +141,9 @@ def build_graph(llm, trace: Trace, limits: Limits, executor: Callable[..., dict]
                 return_type=task.get("return_type"),
             )
         passed = sum(1 for r in result.get("test_results", []) if r.get("passed"))
+        flags = [c.get("visible", False) for c in task["test_cases"]]
         trace.event("execute", attempt=state["attempt"], status=result.get("status"),
-                    passed=passed, total=len(cases), result=result)
+                    passed=passed, total=len(cases), result=compact_result(result, flags))
         return {"exec_result": result}
 
     def verify_node(state: RunState) -> RunState:
