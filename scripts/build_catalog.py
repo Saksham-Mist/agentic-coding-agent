@@ -164,7 +164,7 @@ def build_task(task_id: str, catalog_path: Path = CATALOG, ref_dir: Path = REF_D
     if write:
         out = [new_entry if e["task_id"] == task_id else e for e in catalog]
         tmp = catalog_path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
+        tmp.write_text(dump_catalog(out), encoding="utf-8")
         tmp.replace(catalog_path)  # atomic: a crash never leaves a half-written catalog
 
     slowest = max(timings) if timings else 0.0
@@ -178,6 +178,24 @@ def build_task(task_id: str, catalog_path: Path = CATALOG, ref_dir: Path = REF_D
         "warning": (f"slowest case {slowest:.2f}s locally; the sandbox runs all cases in 10s on 1 CPU"
                     if slowest > SLOW_CASE_SECONDS else None),
     }
+
+
+def dump_catalog(entries: list[dict[str, Any]]) -> str:
+    """Readable where people edit (prompt, signature, constraints are
+    indented) and compact where the data is big: one test case per line.
+    Plain indent=2 put every number of a 10^5-element input on its own
+    line, making the catalog 38 MB instead of 9 MB."""
+    blocks = []
+    for e in entries:
+        head = {k: v for k, v in e.items() if k != "test_cases"}
+        lines = json.dumps(head, indent=2, ensure_ascii=False).splitlines()[:-1]  # drop closing "}"
+        lines[-1] += ","
+        cases = [json.dumps(c, separators=(",", ":"), ensure_ascii=False) for c in e.get("test_cases", [])]
+        lines.append('  "test_cases": [')
+        lines += [f"    {c}," for c in cases[:-1]] + ([f"    {cases[-1]}"] if cases else [])
+        lines += ["  ]", "}"]
+        blocks.append("\n".join("  " + line for line in lines))
+    return "[\n" + ",\n".join(blocks) + "\n]\n"
 
 
 def check(catalog_path: Path = CATALOG) -> int:

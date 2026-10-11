@@ -21,10 +21,14 @@ import sys
 import traceback
 
 # Python's default limit (1000) would fail correct recursive solutions on
-# inputs within the stated constraints (e.g. a 2000-node chain tree), which
-# measures an interpreter setting, not the algorithm. LeetCode raises it too.
+# inputs within the stated constraints, which measures an interpreter
+# setting, not the algorithm (LeetCode raises it too). 200,000 covers the
+# deepest legitimate case: recursive DFS on an all-land 300x300 grid goes
+# ~90,000 deep (measured: passes with this limit, fails with 10,000).
+# Python 3.11 keeps pure-Python frames on the heap, so this doesn't crash;
+# runaway recursion is still bounded by --memory and the 10s timeout.
 # Set at import so it also applies when scripts/build_catalog.py loads this.
-sys.setrecursionlimit(10_000)
+sys.setrecursionlimit(200_000)
 
 
 class ListNode:
