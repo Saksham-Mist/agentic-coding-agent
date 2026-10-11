@@ -148,11 +148,54 @@ def test_class_mode(tmp_path):
             out.append({"operations": ["Counter"] + ["inc"] * n + ["get"], "arguments": [[n]] + [[]] * (n + 1)})
         return out
     """
-    cat, ref = _setup(tmp_path, entry, reference, cases)
-    bc.build_task("toy_counter", cat, ref)
+    brute = """
+    class _Brute:
+        def __init__(self, start):
+            self.calls = [start]
+        def inc(self):
+            self.calls.append(1)
+        def get(self):
+            return sum(self.calls)
+    brute = _Brute
+    """
+    cat, ref = _setup(tmp_path, entry, reference, textwrap.dedent(cases) + textwrap.dedent(brute))
+    report = bc.build_task("toy_counter", cat, ref)
     built = json.loads(cat.read_text())[0]["test_cases"]
     assert built[0]["expected_output"] == [None, None, 6]
     assert built[-1]["expected_output"][-1] == 1000
+    assert report["brute_checked"] == report["cases"] - 1  # class-mode brute check runs and agrees
+
+
+def test_class_mode_brute_catches_wrong_reference(tmp_path):
+    entry = _entry("toy_counter", "Counter", comparator="ops_sequence")
+    entry["function_signature"] = "class Counter:"
+    wrong = """
+    class Counter:
+        def __init__(self, start):
+            self.n = start
+        def inc(self):
+            self.n += 2
+        def get(self):
+            return self.n
+    """
+    cases = """
+    VISIBLE = [{"operations": ["Counter", "inc", "get"], "arguments": [[5], [], []]}]
+    EDGE = [{"operations": ["Counter", "get"], "arguments": [[0], []]}]
+    MAX = [{"operations": ["Counter", "get"], "arguments": [[1], []]}]
+    def generate(rng):
+        return [{"operations": ["Counter"] + ["inc"] * n + ["get"], "arguments": [[0]] + [[]] * (n + 1)} for n in range(1, 7)]
+    class _Brute:
+        def __init__(self, start):
+            self.n = start
+        def inc(self):
+            self.n += 1
+        def get(self):
+            return self.n
+    brute = _Brute
+    """
+    cat, ref = _setup(tmp_path, entry, wrong, cases)
+    with pytest.raises(bc.BuildError, match="reference and brute disagree"):
+        bc.build_task("toy_counter", cat, ref)
 
 
 def test_check_reports_invalid_entries(tmp_path, capsys):

@@ -101,6 +101,9 @@ def build_task(task_id: str, catalog_path: Path = CATALOG, ref_dir: Path = REF_D
         raise BuildError(f"{task_id}: reference does not define {ep!r}")
 
     cm = _load_module(cases_file, f"cases_{task_id}")
+    # A brute force for linked-list/tree tasks needs the harness's own
+    # node classes (they aren't importable from the case file itself).
+    cm.ListNode, cm.TreeNode = h.ListNode, h.TreeNode
     rng = random.Random(getattr(cm, "SEED", 0))
     groups = [("visible", getattr(cm, "VISIBLE", [])), ("edge", getattr(cm, "EDGE", [])),
               ("random", cm.generate(rng) if hasattr(cm, "generate") else []),
@@ -127,8 +130,16 @@ def build_task(task_id: str, catalog_path: Path = CATALOG, ref_dir: Path = REF_D
         bns = {"ListNode": h.ListNode, "TreeNode": h.TreeNode, ep: brute}
         check = [(i, r) for i, r, k in zip(inputs, results, kinds) if k != "max"]
         bres, _ = _run(h, bns, entry, [i for i, _ in check])
+        def same(a, b):
+            # Class mode replays a call sequence; its results compare
+            # exactly (the harness's _compare covers function mode only
+            # and fails closed on "ops_sequence").
+            if entry["comparator"] == "ops_sequence":
+                return a == b
+            return h._compare(a, b, entry["comparator"])
+
         for (i, ref_r), b in zip(check, bres):
-            if b.get("error") or not h._compare(b["actual"], ref_r["actual"], entry["comparator"]):
+            if b.get("error") or not same(b["actual"], ref_r["actual"]):
                 raise BuildError(
                     f"{task_id}: reference and brute disagree on {json.dumps(i)[:200]}\n"
                     f"  reference: {json.dumps(ref_r['actual'])[:200]}\n"

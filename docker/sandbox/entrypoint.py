@@ -20,6 +20,12 @@ import json
 import sys
 import traceback
 
+# Python's default limit (1000) would fail correct recursive solutions on
+# inputs within the stated constraints (e.g. a 2000-node chain tree), which
+# measures an interpreter setting, not the algorithm. LeetCode raises it too.
+# Set at import so it also applies when scripts/build_catalog.py loads this.
+sys.setrecursionlimit(10_000)
+
 
 class ListNode:
     def __init__(self, val=0, next=None):
