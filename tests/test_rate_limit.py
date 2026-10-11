@@ -120,12 +120,19 @@ def test_limit_is_per_ip(make_client):
 
 
 @needs_db
-def test_invalid_task_id_does_not_use_a_slot(make_client):
+def test_invalid_task_id_does_not_use_a_slot(make_client, monkeypatch):
     c = make_client("203.0.113.30", limit=1)
     assert c.post("/runs", json={"task_id": "no_such_task"}).status_code == 422
-    from agentic_coding_agent.agent.catalog import load_catalog, validate_entry
-    not_ready = next(t for t, e in load_catalog().items() if validate_entry(e))
-    assert c.post("/runs", json={"task_id": not_ready}).status_code == 422
+    # An unfinished entry added to the catalog the API sees (the real
+    # catalog may have none left once every task is built).
+    import agentic_coding_agent.api.app as app_module
+    from agentic_coding_agent.agent.catalog import load_catalog
+
+    real = load_catalog()
+    stub = {"task_id": "zz_unfinished_stub", "entry_point": "f", "comparator": "exact", "prompt": "",
+            "function_signature": "", "constraints": "", "test_cases": []}
+    monkeypatch.setattr(app_module, "load_catalog", lambda path=None: {**real, "zz_unfinished_stub": stub})
+    assert c.post("/runs", json={"task_id": "zz_unfinished_stub"}).status_code == 422
     assert c.post("/runs", json={"task_id": "two_sum"}).status_code == 202
 
 

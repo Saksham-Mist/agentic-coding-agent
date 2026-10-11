@@ -206,20 +206,29 @@ def counting_client(_shared_counting_client):
     return _shared_counting_client
 
 
-def _not_ready_task():
-    """A catalog entry that doesn't pass validation (stub or unreviewed),
-    picked from the catalog itself so the test survives catalog builds."""
-    from agentic_coding_agent.agent.catalog import load_catalog, validate_entry
+STUB_ID = "zz_unfinished_stub"
 
-    return next(t for t, e in load_catalog().items() if validate_entry(e))
+
+@pytest.fixture
+def with_stub(monkeypatch):
+    """Adds an unfinished entry to the catalog the API sees. Picking one
+    from the real catalog broke once all 18 entries were valid."""
+    import agentic_coding_agent.api.app as app_module
+    from agentic_coding_agent.agent.catalog import load_catalog
+
+    real = load_catalog()
+    stub = {"task_id": STUB_ID, "entry_point": "f", "comparator": "exact", "prompt": "",
+            "function_signature": "", "constraints": "", "test_cases": []}
+    monkeypatch.setattr(app_module, "load_catalog", lambda path=None: {**real, STUB_ID: stub})
+    return STUB_ID
 
 
 @pytest.mark.parametrize("payload, reason", [
     ({"task_id": "no_such_task"}, "unknown_task_id"),
-    ({"task_id": None}, "task_not_ready"),  # filled in with _not_ready_task()
+    ({"task_id": None}, "task_not_ready"),  # filled in with the with_stub fixture
 ])
-def test_rejected_task_ids_create_no_run(counting_client, payload, reason):
-    not_ready = _not_ready_task()
+def test_rejected_task_ids_create_no_run(counting_client, with_stub, payload, reason):
+    not_ready = with_stub
     if payload["task_id"] is None:
         payload = {"task_id": not_ready}
     before = _test_rows()
