@@ -130,8 +130,13 @@ def test_rejected_submission_is_recorded_not_raised(env):
 
 
 def test_runnable_tasks_matches_api_rule():
-    from agentic_coding_agent.agent.catalog import load_catalog, validate_entry
-    assert ev.runnable_tasks() == sorted(t for t, e in load_catalog().items() if not validate_entry(e))
+    # Per set, so it holds however many main/stress entries are valid.
+    from agentic_coding_agent.agent.catalog import load_catalog, task_set, validate_entry
+    catalog = load_catalog()
+    for which in ("main", "stress"):
+        expected = sorted(t for t, e in catalog.items() if not validate_entry(e) and task_set(e) == which)
+        assert ev.runnable_tasks(which) == expected
+    assert ev.runnable_tasks() == ev.runnable_tasks("main")  # default is the main set
 
 
 def test_eval_sets_are_separate(monkeypatch):
@@ -141,4 +146,5 @@ def test_eval_sets_are_separate(monkeypatch):
     stress = {**real["two_sum"], "task_id": "zz_stress_copy", "set": "stress"}
     monkeypatch.setattr(ev, "load_catalog", lambda path=None: {**real, "zz_stress_copy": stress})
     assert "zz_stress_copy" not in ev.runnable_tasks()          # default = main
-    assert ev.runnable_tasks("stress") == ["zz_stress_copy"]
+    assert "zz_stress_copy" in ev.runnable_tasks("stress")
+    assert not set(ev.runnable_tasks("main")) & set(ev.runnable_tasks("stress"))  # never mixed
