@@ -140,7 +140,14 @@ class RunStore:
         return [{"run_id": str(r[0]), "task_id": r[1], "status": r[2]} for r in rows]
 
     def stats(self) -> dict[str, Any]:
-        """Aggregates for GET /stats, per source and overall (excluding test runs)."""
+        """Aggregates for GET /stats.
+
+        `public` is the headline: runs submitted by public visitors through
+        POST /runs (source "api") only. Every source, including the owner's
+        cli/eval runs and tests, is still reported separately in
+        `by_source`. (An earlier "overall_excluding_test" figure mixed the
+        owner's eval runs into the headline, so it said 106/106 before a
+        single visitor had tried the demo.)"""
         rows = self._conn.execute(
             """
             SELECT source,
@@ -154,19 +161,6 @@ class RunStore:
             FROM runs GROUP BY source ORDER BY source
             """
         ).fetchall()
-        overall = self._conn.execute(
-            """
-            SELECT count(*) FILTER (WHERE status IN ('passed', 'incomplete', 'error')),
-                   count(*) FILTER (WHERE status = 'passed'),
-                   count(*) FILTER (WHERE status IN ('queued', 'running')),
-                   avg(steps_taken) FILTER (WHERE status = 'passed'),
-                   avg(tokens_used) FILTER (WHERE status IN ('passed', 'incomplete', 'error')),
-                   avg(extract(epoch FROM updated_at - created_at))
-                       FILTER (WHERE status IN ('passed', 'incomplete', 'error'))
-            FROM runs WHERE source <> 'test'
-            """
-        ).fetchone()
-
         def shape(finished, passed, in_progress, avg_steps, avg_tokens, avg_seconds):
             return {
                 "finished_runs": finished,
@@ -178,9 +172,10 @@ class RunStore:
                 "avg_wall_clock_seconds": round(float(avg_seconds), 1) if avg_seconds is not None else None,
             }
 
+        by_source = {r[0]: shape(*r[1:]) for r in rows}
         return {
-            "overall_excluding_test": shape(*overall),
-            "by_source": {r[0]: shape(*r[1:]) for r in rows},
+            "public": by_source.get("api", shape(0, 0, 0, None, None, None)),
+            "by_source": by_source,
         }
 
     def consume_rate_limit(self, ip: str, limit: int) -> int | None:

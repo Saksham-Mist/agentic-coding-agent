@@ -126,7 +126,7 @@ def test_stats_counts_test_runs_separately(client):
     stats = client.get("/stats").json()
     assert stats["by_source"]["test"]["passed"] >= 1
     assert stats["by_source"]["test"]["success_rate"] is not None
-    assert "overall_excluding_test" in stats
+    assert "public" in stats
 
 
 def test_unknown_and_malformed_run_ids_are_404(client):
@@ -343,3 +343,49 @@ def test_owner_can_run_stress_tasks(tmp_path, with_stress_task):
         _wait(c, run_id)
     store.delete_run(run_id)
     store.close()
+
+
+def test_public_stats_count_only_visitor_runs():
+    """GET /stats' headline counts public (source=api) runs only; owner,
+    eval and test runs appear only in by_source. Checked by inserting known
+    runs and comparing before/after deltas (other rows may exist)."""
+    from agentic_coding_agent.db.store import RunStore
+
+    store = RunStore()
+    ids = {src: [str(uuid.uuid4()) for _ in range(n)] for src, n in (("api", 2), ("cli", 1), ("eval", 1))}
+    before = store.stats()
+    try:
+        for src, run_ids in ids.items():
+            for run_id in run_ids:
+                store.create_queued(run_id, "two_sum", source=src)
+                store._conn.execute("UPDATE runs SET status = 'passed', steps_taken = 2, tokens_used = 100 "
+                                    "WHERE run_id = %s", (run_id,))
+        after = store.stats()
+        assert after["public"]["finished_runs"] - before["public"]["finished_runs"] == 2
+        assert after["public"]["passed"] - before["public"]["passed"] == 2
+        assert after["public"] == after["by_source"]["api"]
+
+        def finished(stats, src):
+            return stats["by_source"].get(src, {}).get("finished_runs", 0)
+        assert finished(after, "cli") - finished(before, "cli") == 1
+        assert finished(after, "eval") - finished(before, "eval") == 1
+    finally:
+        for run_ids in ids.values():
+            for run_id in run_ids:
+                store.delete_run(run_id)
+        store.close()
+
+
+def test_public_stats_are_zero_without_visitor_runs():
+    from agentic_coding_agent.db.store import RunStore
+
+    store = RunStore()
+    try:
+        stats = store.stats()
+        if "api" not in stats["by_source"]:
+            assert stats["public"]["finished_runs"] == 0
+            assert stats["public"]["success_rate"] is None
+        else:
+            assert stats["public"] == stats["by_source"]["api"]
+    finally:
+        store.close()
