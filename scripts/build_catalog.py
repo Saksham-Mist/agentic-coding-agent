@@ -4,7 +4,7 @@
     python scripts/build_catalog.py --all            # build every task that has files
     python scripts/build_catalog.py --check          # validate all 18 entries
 
-Per task (the design notes "Filling in task_catalog.json"):
+Per task:
   task_catalog.json entry      prompt, function_signature, constraints (owner)
   reference/<task_id>.py       the owner's own accepted solution
   reference/cases/<task_id>.py the case inputs:

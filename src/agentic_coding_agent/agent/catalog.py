@@ -1,6 +1,6 @@
 """task_catalog.json loader + the read_test_spec tool.
 
-See the design notes "Tool: read_test_spec" for the contract this
+read_test_spec below is the tool the agent sees; this
 implements, and its "Harness modes" section for why test_cases here
 are visible-only (hidden cases exist so the agent can't special-case
 the expected output) and what arg_types/comparator/entry_point are
@@ -110,14 +110,14 @@ def read_test_spec(task_id: str, path: Path | None = None) -> dict[str, Any]:
     }
 
 
-# --- step 5.1: catalog entry validation (the design notes rules) ---
+# --- step 5.1: catalog entry validation ---
 
 COMPARATORS = {"exact", "unordered", "unordered_nested", "ops_sequence"}
 ARG_TYPES = {"linked_list", "tree", "linked_list_list"}
 RETURN_TYPES = {"linked_list", "tree"}
 MIN_CASES = 8
 # "main" = the 18-task eval set served publicly; "stress" = owner-only
-# twisted variants used to exercise retries (the design notes decision log).
+# twisted variants used to exercise retries.
 TASK_SETS = {"main", "stress"}
 
 

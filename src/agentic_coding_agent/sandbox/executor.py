@@ -1,5 +1,5 @@
-"""The execute_code tool — see the design notes "Tool: execute_code"
-and the design notes' resource/timeout limits.
+"""The execute_code tool: runs model-written code in a fresh, resource-
+and time-limited Docker container.
 
 Fresh container per call, --network=none --cpus=1 --memory=512m,
 killed at 10s wall-clock, always --rm. Every failure mode (timeout,
@@ -19,7 +19,7 @@ MEMORY = "512m"
 # Caps total process count in the container. Without this, a fork
 # bomb can spawn processes faster than the kernel reaps them even
 # after `docker kill` sends SIGKILL to PID 1 — found by actually
-# running one (see the design notes section 7): the container sat at ~2700
+# running one: the container sat at ~2700
 # PIDs and 99.7% CPU, unkillable, until the whole WSL2 VM was reset.
 PIDS_LIMIT = "100"
 
@@ -41,10 +41,10 @@ def execute_code(
     return_type: str | None = None,
 ) -> dict:
     """Run `code` inside a fresh, resource-limited container and
-    return the the design notes output shape.
+    return the execute_code output shape.
 
     comparator/arg_types/return_type come straight from the matching
-    task_catalog.json entry — see the design notes "Harness modes"."""
+    task_catalog.json entry."""
     if language != "python":
         return _empty_result("error", f"unsupported language: {language!r}")
 

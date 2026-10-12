@@ -5,7 +5,7 @@
                                        --give_up/limit--> END (incomplete)
 
 Limits are enforced here, in orchestrator code the model can't reason
-around (the design notes): retries per subtask (via the verifier), LLM
+around: retries per subtask (via the verifier), LLM
 steps per run, and tokens per run. Every limit check happens before
 an LLM call, so a run never makes a call it isn't allowed to.
 

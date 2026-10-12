@@ -1,5 +1,4 @@
 -- Step 1.3: core schema — runs, steps, rate_limits.
--- See the design notes §5/§9 and the design notes for the fields these back.
 
 CREATE TABLE IF NOT EXISTS runs (
     run_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),

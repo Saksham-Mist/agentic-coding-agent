@@ -2,18 +2,18 @@
 
 Decides pass / retry / give_up from execute_code's output. A model
 grading its own output is the failure mode guardrails exist to
-prevent (the design notes §2), so this is plain code.
+prevent, so this is plain code.
 
 "Pass" is recomputed from test_results, never taken from the status
 string alone: the result must say "pass", contain exactly the
 expected number of test results, and every one must have passed.
-Anything else is not a pass (the design notes: never a false "pass").
+Anything else is not a pass (never report a false "pass").
 """
 from __future__ import annotations
 
 from typing import Any
 
-# the design notes: max 3 retries per subtask -> 1 first attempt + 3 retries.
+# Max 3 retries per subtask -> 1 first attempt + 3 retries.
 MAX_RETRIES = 3
 
 _KNOWN_STATUSES = {"pass", "fail", "error", "timeout", "resource_exceeded"}

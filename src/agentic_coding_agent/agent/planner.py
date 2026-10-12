@@ -3,7 +3,7 @@
 A separate LLM call (not folded into the Worker prompt) that turns a
 task spec into an ordered plan. The plan is written to the trace
 before anything executes, so "plan then execute" is an inspectable
-step (the design notes §2).
+step.
 """
 from __future__ import annotations
 

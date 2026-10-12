@@ -1,10 +1,10 @@
 """Plain-text trace log — step 3.7.
 
 Renders trace events as readable text (plan -> each step -> pass/fail
--> retry, the design notes) to stdout and to logs/<run_id>.log.
+-> retry) to stdout and to logs/<run_id>.log.
 The same render_event() turns Postgres rows back into the log, so the
 two are produced from the same events and can be checked against each
-other (the design notes §7).
+other.
 """
 from __future__ import annotations
 

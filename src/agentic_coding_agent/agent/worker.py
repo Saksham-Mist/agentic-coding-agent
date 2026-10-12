@@ -3,7 +3,7 @@
 One LLM call per attempt: writes a complete Python solution for the
 current subtask. On a retry, the prompt also carries the prior code
 and its failing test results, so the correction is based on the
-concrete failure (the design notes §2).
+concrete failure.
 
 On a retry the model first writes a short diagnosis of why the last
 attempt failed, then the fix, in the same call (a Reflexion-style
@@ -13,7 +13,7 @@ recorded in the trace so the reasoning behind each fix is visible.
 Hidden test cases: the verifier runs them, but their inputs and
 expected outputs never reach this prompt — only a count of how many
 failed. Otherwise the retry loop would leak the hidden cases to the
-model (the design notes "Harness modes").
+model.
 """
 from __future__ import annotations
 

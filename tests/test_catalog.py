@@ -59,7 +59,7 @@ def test_hidden_cases_are_not_returned():
 
 
 def test_all_18_catalog_entries_load_without_error():
-    # The main eval set is the 18 tasks of the design notes; owner-only
+    # The main eval set is the 18 planned tasks; owner-only
     # "stress" entries are counted separately.
     catalog = load_catalog(path=CATALOG_PATH)
     assert sum(1 for e in catalog.values() if e.get("set", "main") == "main") == 18

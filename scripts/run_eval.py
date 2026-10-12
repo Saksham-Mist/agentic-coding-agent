@@ -11,7 +11,7 @@ are interleaved (all tasks once, then again), so a short outage hits
 different tasks rather than every repeat of one task.
 
 Every batch stores the exact command, git commit and model, so each
-number in the design notes section 6 can cite what produced it.
+number can be traced back to what produced it.
 The model recorded is the one this script's environment resolves
 (GEMINI_MODEL or the code default); start the server from the same .env.
 The default task list is whatever the API serves: catalog entries that
@@ -37,11 +37,11 @@ sys.path.insert(0, str(ROOT / "src"))
 from agentic_coding_agent.agent.catalog import load_catalog, task_set, validate_entry  # noqa: E402
 from agentic_coding_agent.agent.llm import DEFAULT_MODEL  # noqa: E402
 
-DEFAULT_REPEATS = 3          # the design notes section 6: runs per task
+DEFAULT_REPEATS = 3          # runs per task
 RUN_TIMEOUT_SECONDS = 900    # well above 15 LLM steps + sandbox time
 POLL_SECONDS = 2.0
 
-# From the design notes (the difficulty column there is the source).
+# Difficulty per task, as planned when the catalog was chosen.
 DIFFICULTY = {
     "two_sum": "Easy", "valid_parentheses": "Easy", "reverse_integer": "Easy",
     "merge_two_sorted_lists": "Easy", "maximum_subarray": "Easy", "climbing_stairs": "Easy",
@@ -50,7 +50,7 @@ DIFFICULTY = {
     "binary_tree_level_order_traversal": "Medium", "course_schedule": "Medium",
     "coin_change": "Medium", "number_of_islands": "Medium", "lru_cache": "Hard",
     "merge_k_sorted_lists": "Hard", "trapping_rain_water": "Hard", "word_ladder": "Hard",
-    # stress set (twisted variants; difficulty is my estimate, not the design notes')
+    # stress set (twisted variants; difficulty is my estimate)
     "stairs_no_double_two": "Medium", "rain_water_with_drains": "Hard",
     "two_sum_value_pairs": "Medium", "anagram_groups_sorted": "Medium",
 }

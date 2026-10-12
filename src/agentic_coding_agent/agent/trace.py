@@ -3,7 +3,7 @@
 An ordered list of events for one run, also emitted to the
 `agentic_coding_agent.trace` logger. Step 3.7 adds the plain-text
 stdout/.log writer and Postgres rows from these same events, so the
-two never disagree (the design notes §7).
+two never disagree.
 """
 from __future__ import annotations
 

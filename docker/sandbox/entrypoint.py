@@ -6,8 +6,8 @@ Reads a JSON payload from stdin:
     arg_types?: {argname: "linked_list"|"tree"|"linked_list_list"},
     return_type?: "linked_list"|"tree" }
 
-Prints the the design notes output shape to stdout. See
-the design notes "Harness modes" for what each comparator/mode means.
+Prints the execute_code output shape ({status, stdout, stderr,
+test_results}) to stdout.
 
 Each test case's printed output and exception are captured separately
 and attached to that case's result (stdout/stderr/error), so hidden

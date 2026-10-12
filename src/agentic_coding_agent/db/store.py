@@ -4,7 +4,7 @@ Every trace event is written as a `steps` row together with the
 `runs` row update (status, step and token counters), in one SQL
 statement: atomic on its own, and one round trip instead of four
 (Neon is ~290ms away from the dev machine). Postgres is the source of
-truth for resuming a crashed run (the design notes §5, §7).
+truth for resuming a crashed run.
 
 The connection is long-lived, and Neon closes idle connections (its
 free tier suspends the database after a few minutes of inactivity).

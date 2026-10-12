@@ -1,6 +1,6 @@
 """Gemini client wrapper — step 3.1.
 
-Every call logs token usage so the design notes' 100k-tokens/run budget
+Every call logs token usage so the 100k-tokens/run budget
 (step 3.5) has real numbers to check against, not estimates.
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ MODEL = os.environ.get("GEMINI_MODEL", DEFAULT_MODEL)
 # The free tier returns 503 "high demand" often enough in practice
 # (hit twice in three calls while building this) that retrying is
 # load-bearing, not defensive polish — found while verifying this
-# step, see the design notes section 7.
+# step.
 _RETRY = retry(
     retry=retry_if_exception_type(ServerError),
     wait=wait_exponential(multiplier=1, min=2, max=20),
@@ -48,8 +48,7 @@ class GeminiClient:
         (free-tier "high demand") with exponential backoff; raises on
         anything else — the caller (Planner/Worker nodes, step
         3.2/3.3) is responsible for turning that into a structured
-        retry/abort decision, same rule as every tool in
-        the design notes."""
+        retry/abort decision, the same rule every tool follows."""
         response = self._generate_with_retry(prompt, system_instruction)
 
         usage = response.usage_metadata

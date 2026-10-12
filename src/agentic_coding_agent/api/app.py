@@ -6,7 +6,7 @@
     GET  /tasks       the public task list, visible examples only
     GET  /            a one-page demo that drives the three calls above
 
-Execution model (the design notes §9): POST only inserts a `queued` row
+Execution model: POST only inserts a `queued` row
 and returns; one background worker thread runs queued runs one at a
 time, so v1 stays sequential. On startup the worker re-queues anything
 left `queued` or `running`, and running ones resume from their last
@@ -62,7 +62,7 @@ def _is_ready(entry: dict[str, Any]) -> bool:
 
 def validate_task_id(task_id: str, owner: bool = False) -> None:
     """Step 4.2: POST /runs only runs ready entries of the fixed catalog
-    (the design notes "Public abuse limits"). Raises 422 otherwise, before
+    (public abuse limits). Raises 422 otherwise, before
     any run row exists or any LLM call is made. Public callers only see
     the main set; owner-only "stress" tasks look unknown to them."""
     try:
@@ -151,7 +151,7 @@ OWNER_SOURCES = {"cli", "eval"}
 
 def owner_source(request: Request, owner_token: str | None) -> str | None:
     """Step 4.4: the owner's requests skip the rate limit
-    (the design notes §9, "operator's own credentials").
+    (the operator's own credentials).
 
     No Authorization header -> None (public caller). A bearer token that
     matches OWNER_TOKEN -> the run source ("cli", or "eval" via
@@ -291,7 +291,7 @@ def create_app(
     """`run_source` tags runs created through POST /runs; tests pass
     "test" so their runs never count toward the public stats.
     `rate_limit` is runs per IP per UTC day (default
-    RATE_LIMIT_RUNS_PER_DAY, else 5; the design notes)."""
+    RATE_LIMIT_RUNS_PER_DAY, else 5)."""
     if rate_limit is None:
         rate_limit = int(os.environ.get("RATE_LIMIT_RUNS_PER_DAY", 5))
     if owner_token is None:
@@ -339,7 +339,7 @@ def create_app(
         # Order matters: a bad task_id is rejected without using up one
         # of the caller's runs, and a rate-limited request never creates
         # a row or reaches the worker, so it costs no tokens or sandbox
-        # time (the design notes "Public abuse limits").
+        # time.
         # Owner check first: it decides which task sets are allowed.
         owner = owner_source(request, owner_token)
         validate_task_id(req.task_id, owner=bool(owner))
