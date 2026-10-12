@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentic Coding Agent</title>
+<meta name="description" content="An AI agent that writes Python, runs it in a locked-down sandbox, checks it against hidden tests and fixes its own mistakes. Watch a run live.">
+<style>
+  :root {
+    --bg: #f6f5f1; --surface: #ffffff; --surface-2: #efede6; --text: #1c1b18; --muted: #66635b;
+    --line: #dedbd2; --accent: #2f5bd3; --accent-text: #ffffff;
+    --pass: #1d7a45; --pass-bg: #e3f3e8; --fail: #b4322a; --fail-bg: #fbe7e4;
+    --warn: #8a5a00; --warn-bg: #fbf0d9; --code-bg: #1e1f24; --code-text: #e6e6e6;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141413; --surface: #1d1d1b; --surface-2: #262623; --text: #ecebe6; --muted: #a29f96;
+      --line: #34332f; --accent: #7d9cf0; --accent-text: #10131c;
+      --pass: #6fcf97; --pass-bg: #15291d; --fail: #f08b80; --fail-bg: #331b18;
+      --warn: #e5b45a; --warn-bg: #2f2512; --code-bg: #0f0f12; --code-text: #e6e6e6;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 32px 20px 64px; }
+  a { color: var(--accent); }
+  h1 { font-size: clamp(26px, 4vw, 34px); line-height: 1.15; margin: 0 0 8px; letter-spacing: -0.01em; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  .lede { font-size: 17px; color: var(--muted); max-width: 720px; margin: 0 0 20px; }
+  .steps { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 20px; padding: 0; list-style: none; counter-reset: s; }
+  .steps li { counter-increment: s; background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
+    padding: 5px 12px 5px 6px; font-size: 13.5px; }
+  .steps li::before { content: counter(s); display: inline-grid; place-items: center; width: 20px; height: 20px;
+    margin-right: 7px; border-radius: 50%; background: var(--surface-2); font-size: 12px; font-weight: 600; }
+  .stats { display: flex; flex-wrap: wrap; gap: 10px 24px; font-size: 13.5px; color: var(--muted); margin-bottom: 28px; }
+  .stats b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 20px; align-items: start; }
+  @media (max-width: 860px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+  .card { min-width: 0; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  select, button { font: inherit; }
+  select { width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--surface); color: var(--text); }
+  .btn { display: inline-flex; align-items: center; gap: 8px; border: 0; border-radius: 8px; padding: 10px 18px;
+    background: var(--accent); color: var(--accent-text); font-weight: 600; cursor: pointer; }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .muted { color: var(--muted); }
+  .small { font-size: 13px; }
+  .prompt { white-space: pre-wrap; margin: 14px 0 10px; }
+  code, pre, .mono { font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace; font-size: 13px;
+    font-variant-ligatures: none; font-feature-settings: "calt" 0, "liga" 0; }
+  .sig { display: block; background: var(--surface-2); border-radius: 6px; padding: 6px 9px; overflow-x: auto; white-space: pre; }
+  .examples { margin: 12px 0 0; display: grid; gap: 6px; }
+  .ex { background: var(--surface-2); border-radius: 6px; padding: 6px 9px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+  .hiddenbox { margin-top: 10px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 6px; font-size: 13.5px; }
+  .msg { margin-top: 12px; padding: 9px 12px; border-radius: 8px; font-size: 14px; }
+  .msg.err { background: var(--fail-bg); color: var(--fail); }
+  .msg.info { background: var(--surface-2); }
+  .runhead { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 14px; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
+    background: var(--surface-2); color: var(--muted); }
+  .pill.pass { background: var(--pass-bg); color: var(--pass); }
+  .pill.fail { background: var(--fail-bg); color: var(--fail); }
+  .pill.warn { background: var(--warn-bg); color: var(--warn); }
+  .counters { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .empty { color: var(--muted); padding: 28px 8px; text-align: center; }
+  .timeline { list-style: none; margin: 0; padding: 0; }
+  .ev { position: relative; padding: 0 0 16px 26px; }
+  .ev::before { content: ""; position: absolute; left: 7px; top: 18px; bottom: 0; width: 2px; background: var(--line); }
+  .ev:last-child::before { display: none; }
+  .dot { position: absolute; left: 0; top: 4px; width: 16px; height: 16px; border-radius: 50%;
+    background: var(--surface-2); border: 2px solid var(--line); }
+  .ev.pass .dot { background: var(--pass); border-color: var(--pass); }
+  .ev.fail .dot { background: var(--fail); border-color: var(--fail); }
+  .ev.warn .dot { background: var(--warn); border-color: var(--warn); }
+  .ev.ai .dot { background: var(--accent); border-color: var(--accent); }
+  .evtitle { font-weight: 600; }
+  .evtitle .muted { font-weight: 400; font-size: 13px; }
+  .evbody { margin-top: 4px; }
+  .evbody ol { margin: 4px 0 0; padding-left: 20px; }
+  .diag { margin-top: 6px; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--surface-2);
+    border-radius: 0 6px 6px 0; font-size: 14px; }
+  details { margin-top: 6px; }
+  summary { cursor: pointer; color: var(--accent); font-size: 13.5px; }
+  pre.code { margin: 6px 0 0; background: var(--code-bg); color: var(--code-text); padding: 12px; border-radius: 8px;
+    overflow-x: auto; max-height: 420px; }
+  .bar { height: 6px; border-radius: 99px; background: var(--fail-bg); overflow: hidden; margin: 6px 0; max-width: 360px; }
+  .bar > span { display: block; height: 100%; background: var(--pass); }
+  .tbl { overflow-x: auto; margin-top: 6px; }
+  table { border-collapse: collapse; font-size: 13px; min-width: 100%; }
+  th, td { text-align: left; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  td.mono { max-width: 260px; overflow-wrap: anywhere; }
+  .ok { color: var(--pass); font-weight: 700; }
+  .no { color: var(--fail); font-weight: 700; }
+  .final { margin-top: 4px; padding: 12px 14px; border-radius: 10px; font-weight: 600; }
+  .final.pass { background: var(--pass-bg); color: var(--pass); }
+  .final.fail { background: var(--fail-bg); color: var(--fail); }
+  .final.warn { background: var(--warn-bg); color: var(--warn); }
+  .spinner { width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+    display: inline-block; animation: spin .8s linear infinite; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+  footer { margin-top: 36px; font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Agentic Coding Agent</h1>
+    <p class="lede">Pick a coding problem. An AI writes a Python solution, the code runs in a locked box with no
+      internet, and it's checked against tests the AI never saw. If it fails, the AI is shown what went wrong and
+      tries again, within hard limits so it can't loop forever.</p>
+    <ol class="steps" aria-label="How a run works">
+      <li>AI plans</li><li>AI writes code</li><li>Sandbox runs it</li><li>Plain code checks every test</li><li>Retry on failure, max 3</li>
+    </ol>
+    <div class="stats" id="stats" aria-live="polite"></div>
+  </header>
+
+  <div class="grid">
+    <section class="card" aria-labelledby="pick-h">
+      <h2 id="pick-h">1. Choose a problem</h2>
+      <label class="small muted" for="task">Problem</label>
+      <select id="task" disabled><option>Loading problems…</option></select>
+      <div id="problem"></div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn" id="run" disabled>Run the agent</button>
+        <span class="small muted">5 runs per visitor per day</span>
+      </div>
+      <div id="formmsg"></div>
+      <p class="small muted" style="margin:16px 0 0">Want to see it fix its own mistake?
+        <a href="?run=9b836a9a-cd56-415d-a784-3a61a7a9402f" id="example">Open a recorded run</a> on a twisted
+        problem where the first two attempts fail.</p>
+    </section>
+
+    <section class="card" aria-labelledby="run-h">
+      <h2 id="run-h">2. Watch the run</h2>
+      <div id="runhead" class="runhead" hidden></div>
+      <div id="runbody"><div class="empty">Choose a problem and press <b>Run the agent</b>.<br>Each step appears here as it happens.</div></div>
+    </section>
+  </div>
+
+  <footer>
+    Built with FastAPI, LangGraph, Gemini, Docker and Postgres. Developers:
+    <a href="/docs">interactive API docs</a> · <a href="/stats">/stats</a>
+  </footer>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  // Build DOM nodes from data with textContent only: run traces contain model output.
+  function h(tag, attrs, ...kids) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v == null || v === false) continue;
+      if (k === "class") el.className = v; else if (k === "text") el.textContent = v; else el.setAttribute(k, v);
+    }
+    for (const k of kids.flat()) if (k != null && k !== false) el.append(k.nodeType ? k : String(k));
+    return el;
+  }
+  const short = (v, n = 160) => { const s = JSON.stringify(v); return s.length > n ? s.slice(0, n) + "…" : s; };
+  const pretty = (id) => id.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+  const fmtArgs = (input) => Object.entries(input || {}).map(([k, v]) => `${k} = ${short(v, 120)}`).join(", ");
+
+  let tasks = [];
+  let pollTimer = null;
+  let currentRun = null;
+
+  // ---------- stats ----------
+  async function loadStats() {
+    try {
+      const r = await fetch("/stats"); if (!r.ok) return;
+      const s = await r.json();
+      const ev = (s.by_source || {}).eval, pub = s.public || {};
+      const box = $("stats"); box.replaceChildren();
+      if (ev && ev.finished_runs) box.append(h("span", null, "Evaluation runs: ", h("b", { text: `${ev.passed}/${ev.finished_runs} passed` })));
+      box.append(h("span", null, "Visitor runs so far: ", h("b", { text: String(pub.finished_runs || 0) }),
+        pub.finished_runs ? ` (${Math.round((pub.success_rate || 0) * 100)}% passed)` : ""));
+      if (ev && ev.avg_wall_clock_seconds) box.append(h("span", null, "Typical run: ", h("b", { text: `~${Math.round(ev.avg_wall_clock_seconds)} s` })));
+    } catch (_) { /* stats are decoration; the page works without them */ }
+  }
+
+  // ---------- task picker ----------
+  async function loadTasks() {
+    const sel = $("task");
+    try {
+      const r = await fetch("/tasks");
+      if (!r.ok) throw new Error(r.status);
+      tasks = await r.json();
+    } catch (e) {
+      sel.replaceChildren(h("option", { text: "Couldn't load problems" }));
+      showFormMsg("err", "The server didn't answer. Try again in a minute.");
+      return;
+    }
+    sel.replaceChildren(...tasks.map((t) => h("option", { value: t.task_id, text: pretty(t.task_id) })));
+    sel.disabled = false; $("run").disabled = false;
+    renderProblem();
+    syncPicker();
+  }
+
+  function renderProblem() {
+    const t = tasks.find((x) => x.task_id === $("task").value);
+    const box = $("problem"); box.replaceChildren();
+    if (!t) return;
+    box.append(h("p", { class: "prompt", text: t.prompt }));
+    if (t.function_signature) box.append(h("code", { class: "sig", text: t.function_signature }));
+    if (t.constraints) box.append(h("p", { class: "small muted", style: "margin:8px 0 0" }, "Constraints: ", h("span", { class: "mono", text: t.constraints })));
+    const ex = h("div", { class: "examples" }, h("div", { class: "small muted", text: `Examples the AI can see (${t.examples.length})` }));
+    for (const e of t.examples) ex.append(h("div", { class: "ex mono", text: `${fmtArgs(e.input)}  →  ${short(e.expected_output, 200)}` }));
+    box.append(ex);
+    box.append(h("div", { class: "hiddenbox" }, h("b", { text: `+ ${t.hidden_cases} hidden tests` }),
+      " the AI never sees, including edge cases and maximum-size inputs."));
+  }
+
+  function showFormMsg(kind, text) {
+    $("formmsg").replaceChildren(text ? h("div", { class: `msg ${kind}`, text }) : "");
+  }
+
+  // ---------- starting a run ----------
+  async function startRun() {
+    const task_id = $("task").value; if (!task_id) return;
+    const btn = $("run"); btn.disabled = true; showFormMsg(null, "");
+    try {
+      const r = await fetch("/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task_id }) });
+      const body = await r.json().catch(() => ({}));
+      if (r.status === 429) {
+        const secs = (body.detail || {}).retry_after_seconds || 0;
+        const hrs = Math.floor(secs / 3600), mins = Math.ceil((secs % 3600) / 60);
+        showFormMsg("err", `You've used today's ${(body.detail || {}).limit || 5} runs. They reset in ${hrs ? hrs + " h " : ""}${mins} min (midnight UTC). You can still open the recorded run below.`);
+        return;
+      }
+      if (!r.ok) { showFormMsg("err", ((body.detail || {}).message) || `The server returned an error (${r.status}).`); return; }
+      history.pushState(null, "", `?run=${body.run_id}`);
+      watchRun(body.run_id);
+    } catch (_) {
+      showFormMsg("err", "Couldn't reach the server. Check your connection and try again.");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // ---------- watching a run ----------
+  function watchRun(runId) {
+    currentRun = runId;
+    clearTimeout(pollTimer);
+    $("runhead").hidden = true;
+    $("runbody").replaceChildren(h("div", { class: "empty" }, h("span", { class: "spinner" }), " Loading run…"));
+    $("run-h").scrollIntoView({ behavior: "smooth", block: "start" });
+    poll(runId, Date.now(), 0);
+  }
+
+  async function poll(runId, started, failures) {
+    if (runId !== currentRun) return;
+    let run;
+    try {
+      const r = await fetch(`/runs/${encodeURIComponent(runId)}`);
+      if (r.status === 404) { renderMissing(); return; }
+      if (!r.ok) throw new Error(r.status);
+      run = await r.json();
+    } catch (_) {
+      if (failures >= 8) { $("runbody").prepend(h("div", { class: "msg err", text: "Lost contact with the server. Reload the page to check on this run." })); return; }
+      pollTimer = setTimeout(() => poll(runId, started, failures + 1), 2000);
+      return;
+    }
+    if (runId !== currentRun) return;
+    renderRun(run);
+    if (run.status === "queued" || run.status === "running") {
+      pollTimer = setTimeout(() => poll(runId, started, 0), 1000);
+    } else {
+      loadStats();
+    }
+  }
+
+  function renderMissing() {
+    $("runhead").hidden = true;
+    $("runbody").replaceChildren(h("div", { class: "empty", text: "That run doesn't exist. Pick a problem and start a new one." }));
+  }
+
+  const STATUS = {
+    queued: ["", "Queued"], running: ["warn", "Running"], passed: ["pass", "Passed"],
+    incomplete: ["fail", "Gave up"], error: ["fail", "Error"],
+  };
+  const REASONS = {
+    all_tests_passed: "Every test passed, including the hidden ones.",
+    step_limit: "Stopped: hit the limit on AI calls for one run.",
+    token_limit: "Stopped: hit the token budget for one run.",
+  };
+  function reasonText(reason) {
+    if (!reason) return "";
+    if (REASONS[reason]) return REASONS[reason];
+    if (reason.startsWith("retries_exhausted")) return "Stopped: still failing after 3 retries.";
+    return reason.replace(/_/g, " ");
+  }
+
+  let lastRunTask = null;
+  function syncPicker() {
+    // Show the problem of the run being watched, when it's a public one.
+    if (lastRunTask && tasks.some((t) => t.task_id === lastRunTask) && $("task").value !== lastRunTask) {
+      $("task").value = lastRunTask; renderProblem();
+    }
+  }
+
+  function renderRun(run) {
+    if (run.task_id !== lastRunTask) { lastRunTask = run.task_id; syncPicker(); }
+    const [cls, label] = STATUS[run.status] || ["", run.status];
+    const head = $("runhead"); head.hidden = false;
+    const live = run.status === "queued" || run.status === "running";
+    const trace = run.trace || [];
+    const first = trace[0], last = trace[trace.length - 1];
+    const end = live ? Date.now() : (last ? new Date(last.ts).getTime() : 0);
+    const secs = first ? Math.max(0, (end - new Date(first.ts).getTime()) / 1000) : null;
+    head.replaceChildren(
+      h("b", { text: pretty(run.task_id) }),
+      h("span", { class: `pill ${cls}` }, live ? h("span", { class: "spinner", "aria-hidden": "true" }) : null, live ? " " : "", label),
+      h("span", { class: "counters", text: `${run.steps || 0} AI calls · ${(run.tokens || 0).toLocaleString()} tokens${secs != null ? ` · ${secs.toFixed(1)} s` : ""}` }),
+    );
+
+    const list = h("ol", { class: "timeline" });
+    if (run.status === "queued" && !trace.length) {
+      list.append(ev("", "Waiting in line", null, "Runs go one at a time; yours starts as soon as the one ahead finishes."));
+    }
+    for (const e of trace) { const node = renderEvent(e, trace); if (node) list.append(node); }
+    if (run.status === "running") list.append(ev("", h("span", null, h("span", { class: "spinner" }), " Working…"), null, null));
+
+    const body = $("runbody"); body.replaceChildren(list);
+    const fin = trace.find((e) => e.kind === "finish");
+    if (fin) {
+      const retries = trace.filter((e) => e.kind === "worker_code" && e.is_retry).length;
+      const extra = fin.status === "passed" && retries ? ` It fixed itself after ${retries} failed attempt${retries > 1 ? "s" : ""}.` : "";
+      body.append(h("div", { class: `final ${cls}`, text: `${label}. ${reasonText(fin.reason)}${extra}` }));
+    }
+  }
+
+  function ev(cls, title, sub, ...body) {
+    return h("li", { class: `ev ${cls}` }, h("span", { class: "dot", "aria-hidden": "true" }),
+      h("div", { class: "evtitle" }, title, sub ? h("span", { class: "muted", text: `  ${sub}` }) : null),
+      body.some((b) => b != null) ? h("div", { class: "evbody" }, ...body) : null);
+  }
+
+  function renderEvent(e, trace) {
+    switch (e.kind) {
+      case "plan":
+        return ev("ai", "Plan", "AI call 1",
+          h("div", { text: e.approach || "" }),
+          (e.subtasks && e.subtasks.length) ? h("ol", null, e.subtasks.map((s) => h("li", { text: s }))) : null);
+      case "plan_error":
+        return ev("warn", "The plan came back malformed", "it will be retried", null);
+      case "worker_code": {
+        const latest = !trace.some((x) => x.kind === "worker_code" && x.seq > e.seq);
+        const d = h("details", latest ? { open: "" } : null, h("summary", { text: `Show the code (${(e.code || "").split("\n").length} lines)` }),
+          h("pre", { class: "code" }, h("code", { text: e.code || "" })));
+        return ev("ai", e.is_retry ? `Attempt ${e.attempt}: rewrites the code` : `Attempt ${e.attempt}: writes the code`, null,
+          e.is_retry && e.diagnosis ? h("div", { class: "diag" }, h("b", { text: "AI's diagnosis of the failure: " }), e.diagnosis) : null, d);
+      }
+      case "worker_error":
+        return ev("warn", `Attempt ${e.attempt}: the reply had no usable code`, "counts as a failed attempt", null);
+      case "execute": {
+        const vis = ((e.result || {}).visible_test_results) || [];
+        const total = e.total || 0, passed = e.passed || 0;
+        const visPassed = vis.filter((v) => v.passed).length;
+        const hidTotal = Math.max(0, total - vis.length), hidPassed = Math.max(0, passed - visPassed);
+        const ok = e.status === "pass";
+        const status = { timeout: "Hit the 10-second time limit", resource_exceeded: "Hit the 512 MB memory limit",
+          error: "The code crashed or couldn't run" }[e.status] || null;
+        if (!total) return ev("fail", `Sandbox: ${status || "no test results"}`, "every test counts as failed", null);
+        const table = vis.length ? h("div", { class: "tbl" }, h("table", null,
+          h("thead", null, h("tr", null, h("th", { text: "" }), h("th", { text: "Input" }), h("th", { text: "Expected" }), h("th", { text: "Got" }))),
+          h("tbody", null, vis.map((v) => h("tr", null,
+            h("td", { class: v.passed ? "ok" : "no", text: v.passed ? "✓" : "✗" }),
+            h("td", { class: "mono", text: fmtArgs(v.input) }),
+            h("td", { class: "mono", text: short(v.expected) }),
+            h("td", { class: "mono", text: v.actual === undefined ? "—" : short(v.actual) })))))) : null;
+        return ev(ok ? "pass" : "fail", `Sandbox: ${passed} of ${total} tests passed`, status,
+          h("div", { class: "bar", role: "img", "aria-label": `${passed} of ${total} passed` }, h("span", { style: `width:${total ? (100 * passed / total).toFixed(1) : 0}%` })),
+          h("div", { class: "small muted", text: `Visible examples: ${visPassed}/${vis.length} · Hidden tests: ${hidPassed}/${hidTotal} (the AI only learns how many failed)` }),
+          table);
+      }
+      case "verify": {
+        const map = { pass: ["pass", "Checker: pass"], retry: ["warn", "Checker: failed, so the AI gets another try"], give_up: ["fail", "Checker: out of retries"] };
+        const [c, t] = map[e.decision] || ["", `Checker: ${e.decision}`];
+        return ev(c, t, "plain code, no AI", null);
+      }
+      case "resume":
+        return ev("warn", "Server restarted mid-run; resumed from the last saved step", null, null);
+      case "finish":
+        return null; // shown as the final banner
+      default:
+        return null;
+    }
+  }
+
+  // ---------- wiring ----------
+  $("task").addEventListener("change", renderProblem);
+  $("run").addEventListener("click", startRun);
+  $("example").addEventListener("click", (ev) => {
+    ev.preventDefault();
+    const id = new URL(ev.currentTarget.href).searchParams.get("run");
+    history.pushState(null, "", `?run=${id}`); watchRun(id);
+  });
+  window.addEventListener("popstate", () => {
+    const id = new URLSearchParams(location.search).get("run");
+    if (id) watchRun(id); else { currentRun = null; clearTimeout(pollTimer); }
+  });
+
+  loadStats();
+  loadTasks();
+  const initial = new URLSearchParams(location.search).get("run");
+  if (initial) watchRun(initial);
+})();
+</script>
+</body>
+</html>

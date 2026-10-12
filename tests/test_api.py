@@ -129,6 +129,30 @@ def test_stats_counts_test_runs_separately(client):
     assert "public" in stats
 
 
+def test_root_serves_the_demo_page(client):
+    r = client.get("/")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
+    assert "<title>" in r.text and "/tasks" in r.text
+
+
+def test_tasks_lists_public_tasks_without_hidden_cases(client):
+    from agentic_coding_agent.agent.catalog import load_catalog
+
+    r = client.get("/tasks")
+    assert r.status_code == 200
+    tasks = {t["task_id"]: t for t in r.json()}
+    assert "two_sum" in tasks
+    entry = load_catalog()["two_sum"]
+    visible = [c for c in entry["test_cases"] if c.get("visible")]
+    t = tasks["two_sum"]
+    assert len(t["examples"]) == len(visible)
+    assert t["hidden_cases"] == len(entry["test_cases"]) - len(visible)
+    shown = json.dumps(t)
+    for c in entry["test_cases"]:
+        if not c.get("visible"):
+            assert json.dumps(c["input"]) not in shown   # hidden inputs never leave the server
+
+
 def test_unknown_and_malformed_run_ids_are_404(client):
     assert client.get("/runs/00000000-0000-0000-0000-00000000ffff").status_code == 404
     assert client.get("/runs/not-a-uuid").status_code == 404
@@ -324,6 +348,11 @@ def test_public_caller_cannot_see_or_run_stress_tasks(counting_client, with_stre
     assert detail["reason"] == "unknown_task_id"          # looks unknown, doesn't reveal the set
     assert with_stress_task not in detail["available_task_ids"]
     assert CountingLLM.calls == 0
+
+
+def test_tasks_list_hides_stress_tasks(counting_client, with_stress_task):
+    ids = [t["task_id"] for t in counting_client.get("/tasks").json()]
+    assert with_stress_task not in ids and "two_sum" in ids
 
 
 def test_owner_can_run_stress_tasks(tmp_path, with_stress_task):

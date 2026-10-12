@@ -3,6 +3,8 @@
     POST /runs        {task_id} -> 202 {run_id, status: queued}
     GET  /runs/{id}   status, counters and the public trace
     GET  /stats       success rate / steps / tokens / wall clock
+    GET  /tasks       the public task list, visible examples only
+    GET  /            a one-page demo that drives the three calls above
 
 Execution model (the design notes §9): POST only inserts a `queued` row
 and returns; one background worker thread runs queued runs one at a
@@ -22,10 +24,12 @@ import threading
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 load_dotenv()
@@ -37,6 +41,8 @@ from ..db.store import RunStore  # noqa: E402
 from ..sandbox.executor import execute_code  # noqa: E402
 
 logger = logging.getLogger("agentic_coding_agent.api")
+
+_DEMO_PAGE = Path(__file__).with_name("static") / "index.html"
 
 
 class RunRequest(BaseModel):
@@ -79,6 +85,27 @@ def validate_task_id(task_id: str, owner: bool = False) -> None:
             "message": f"'{task_id}' is in the catalog but not filled in yet",
             "available_task_ids": ready,
         })
+
+
+def public_tasks(catalog: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """The tasks a public caller can run, as the demo page shows them:
+    the problem text and only the visible examples (the same ones the
+    model sees). Hidden cases are reduced to a count."""
+    out = []
+    for task_id, e in catalog.items():
+        if task_set(e) != "main" or not _is_ready(e):
+            continue
+        cases = e["test_cases"]
+        out.append({
+            "task_id": task_id,
+            "prompt": e["prompt"],
+            "function_signature": e.get("function_signature"),
+            "constraints": e.get("constraints"),
+            "examples": [{"input": c["input"], "expected_output": c["expected_output"]}
+                         for c in cases if c.get("visible")],
+            "hidden_cases": sum(1 for c in cases if not c.get("visible")),
+        })
+    return out
 
 
 def public_trace(events: list[dict[str, Any]], task: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -220,7 +247,12 @@ class RunWorker:
                 resume_run(run_id, llm, store, executor=self._executor, log=log)
         except Exception as e:  # never let one run kill the worker thread
             logger.exception("run %s crashed", run_id)
-            store.mark_error(run_id, f"worker_error: {type(e).__name__}: {e}")
+            try:
+                store.mark_error(run_id, f"worker_error: {type(e).__name__}: {e}")
+            except Exception:
+                # e.g. the database is unreachable right now; the run stays
+                # 'running' and is resumed on the next startup
+                logger.exception("could not mark run %s as error", run_id)
 
 
 def create_app(
@@ -264,6 +296,18 @@ def create_app(
 
     def store():
         return api_store["store"]
+
+    @app.get("/", include_in_schema=False)
+    def demo_page() -> HTMLResponse:
+        # One static page, no build step: it only calls the public API below.
+        return HTMLResponse(_DEMO_PAGE.read_text(encoding="utf-8"))
+
+    @app.get("/tasks")
+    def list_tasks() -> list[dict[str, Any]]:
+        try:
+            return public_tasks(load_catalog())
+        except CatalogLoadError:
+            raise HTTPException(status_code=503, detail={"reason": "catalog_unavailable"})
 
     @app.post("/runs", status_code=202)
     def create_run(req: RunRequest, request: Request) -> dict[str, Any]:
