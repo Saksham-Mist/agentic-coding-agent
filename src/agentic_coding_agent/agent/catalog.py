@@ -9,10 +9,24 @@ used for later, in the sandbox harness (Phase 2) — not exposed here.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
-_DEFAULT_CATALOG_PATH = Path(__file__).resolve().parents[3] / "task_catalog.json"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def default_catalog_path() -> Path:
+    """TASK_CATALOG_PATH if set (relative paths are from the repo root),
+    else task_catalog.json at the repo root. The real catalog holds the
+    hidden test cases and isn't published, so a fresh clone points this
+    at examples/task_catalog.example.json instead. Read on every call, so
+    the API, the agent and the eval script all follow the same setting."""
+    configured = os.environ.get("TASK_CATALOG_PATH")
+    if configured:
+        p = Path(configured)
+        return p if p.is_absolute() else _REPO_ROOT / p
+    return _REPO_ROOT / "task_catalog.json"
 
 _catalog_cache: dict[str, dict[str, Any]] | None = None
 _catalog_path_cache: Path | None = None
@@ -31,7 +45,7 @@ def load_catalog(path: Path | None = None) -> dict[str, dict[str, Any]]:
     """
     global _catalog_cache, _catalog_path_cache
 
-    catalog_path = path or _DEFAULT_CATALOG_PATH
+    catalog_path = path or default_catalog_path()
     if _catalog_cache is not None and _catalog_path_cache == catalog_path:
         return _catalog_cache
 
