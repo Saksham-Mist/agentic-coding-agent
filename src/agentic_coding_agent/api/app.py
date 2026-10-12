@@ -169,6 +169,30 @@ def owner_source(request: Request, owner_token: str | None) -> str | None:
     return source if source in OWNER_SOURCES else "cli"
 
 
+class HeadAsGet:
+    """Answer HEAD like GET minus the body. Uptime monitors check with
+    HEAD, and FastAPI's GET routes otherwise return 405 to it. Done as
+    middleware so the routes (and the API docs) stay GET-only."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["method"] != "HEAD":
+            return await self.app(scope, receive, send)
+
+        async def send_headers_only(message):
+            if message["type"] == "http.response.body":
+                message = {"type": "http.response.body", "body": b"", "more_body": False}
+                if not getattr(send_headers_only, "done", False):
+                    send_headers_only.done = True
+                    await send(message)
+                return
+            await send(message)
+
+        await self.app({**scope, "method": "GET"}, receive, send_headers_only)
+
+
 class RunWorker:
     """Single background thread: runs are executed strictly one at a time.
 
@@ -293,6 +317,7 @@ def create_app(
 
     app = FastAPI(title="Agentic Coding Agent", lifespan=lifespan)
     app.state.worker = worker
+    app.add_middleware(HeadAsGet)
 
     def store():
         return api_store["store"]

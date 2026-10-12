@@ -135,6 +135,13 @@ def test_root_serves_the_demo_page(client):
     assert "<title>" in r.text and "/tasks" in r.text
 
 
+@pytest.mark.parametrize("path", ["/", "/tasks", "/stats"])
+def test_read_only_routes_answer_head(client, path):
+    # Uptime monitors check with HEAD; it used to get 405.
+    r = client.head(path)
+    assert r.status_code == 200 and r.content == b""
+
+
 def test_tasks_lists_public_tasks_without_hidden_cases(client):
     from agentic_coding_agent.agent.catalog import load_catalog
 
