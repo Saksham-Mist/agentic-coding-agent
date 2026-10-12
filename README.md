@@ -167,7 +167,7 @@ Requirements: Python 3.11+, Docker, a Postgres database (a free [Neon](https://n
 project works) and a [Gemini API key](https://aistudio.google.com/apikey) (free tier).
 
 ```bash
-git clone <this repo> && cd agentic-coding-agent
+git clone https://github.com/Saksham-Mist/agentic-coding-agent.git && cd agentic-coding-agent
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 docker build -t agentic-sandbox:latest docker/sandbox
