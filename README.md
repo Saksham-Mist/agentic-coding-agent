@@ -13,6 +13,8 @@ costs.
 **Try it:** [agentic-coding-agent.duckdns.org](https://agentic-coding-agent.duckdns.org). Pick a
 problem, press Run, and watch the agent plan, write code, get tested and retry, step by step.
 
+![A live run: pick a problem, the agent plans, writes code, and passes all 21 tests including 18 hidden ones](docs/demo.gif)
+
 | Evaluation (3 runs per task) | Result |
 |---|---|
 | 18 classic problems (7 easy, 7 medium, 4 hard) | **18/18 tasks passed every run; 54/54 runs** |

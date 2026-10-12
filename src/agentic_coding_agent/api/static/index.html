@@ -53,7 +53,7 @@
   .prompt { white-space: pre-wrap; margin: 14px 0 10px; }
   code, pre, .mono { font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace; font-size: 13px;
     font-variant-ligatures: none; font-feature-settings: "calt" 0, "liga" 0; }
-  .sig { display: block; background: var(--surface-2); border-radius: 6px; padding: 6px 9px; overflow-x: auto; white-space: pre; }
+  .sig { display: block; background: var(--surface-2); border-radius: 6px; padding: 6px 9px; white-space: pre-wrap; overflow-wrap: anywhere; }
   .examples { margin: 12px 0 0; display: grid; gap: 6px; }
   .ex { background: var(--surface-2); border-radius: 6px; padding: 6px 9px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
   .hiddenbox { margin-top: 10px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 6px; font-size: 13.5px; }
@@ -251,7 +251,9 @@
     clearTimeout(pollTimer);
     $("runhead").hidden = true;
     $("runbody").replaceChildren(h("div", { class: "empty" }, h("span", { class: "spinner" }), " Loading run…"));
-    $("run-h").scrollIntoView({ behavior: "smooth", block: "start" });
+    // Scroll only if the run panel isn't already on screen (on phones it sits below the picker).
+    const top = $("run-h").getBoundingClientRect().top;
+    if (top < 0 || top > window.innerHeight * 0.6) $("run-h").scrollIntoView({ behavior: "smooth", block: "start" });
     poll(runId, Date.now(), 0);
   }
 
